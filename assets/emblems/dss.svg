@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+<title>Original Helldivers-inspired fan art asset</title>
+<desc>Original geometric vector artwork created for this plugin; no game screenshot or extracted texture.</desc>
+<ellipse cx="256.0" cy="256.0" rx="182.0" ry="182.0" fill="none" stroke="#dceeff" stroke-opacity="0.8000" stroke-width="12" stroke-linejoin="round" stroke-linecap="round"/>
+<ellipse cx="256.0" cy="256.0" rx="154.0" ry="154.0" fill="none" stroke="#75c8f2" stroke-opacity="0.6500" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="256,85 280,174 270,350 256,426 242,350 232,174" fill="#142839" fill-opacity="1.0000" stroke="#dceeff" stroke-opacity="1.0000" stroke-width="8" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="109,232 194,209 318,209 403,232 392,273 318,291 194,291 120,273" fill="#254d67" fill-opacity="1.0000" stroke="#dceeff" stroke-opacity="1.0000" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<ellipse cx="256.0" cy="251.0" rx="88.0" ry="49.0" fill="#142839" fill-opacity="1.0000" stroke="#f1d55c" stroke-opacity="1.0000" stroke-width="10" stroke-linejoin="round" stroke-linecap="round"/>
+<ellipse cx="256.0" cy="256.0" rx="40.0" ry="40.0" fill="#4b7587" fill-opacity="1.0000" stroke="#dceeff" stroke-opacity="1.0000" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="256,92 256,420" fill="none" stroke="#f1d55c" stroke-opacity="1.0000" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="96,256 416,256" fill="none" stroke="#75c8f2" stroke-opacity="0.7500" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="256.0,229.0 260.59,244.91 275.09,236.91 267.09,251.41 283.0,256.0 267.09,260.59 275.09,275.09 260.59,267.09 256.0,283.0 251.41,267.09 236.91,275.09 244.91,260.59 229.0,256.0 244.91,251.41 236.91,236.91 251.41,244.91" fill="#f1d55c" fill-opacity="1.0000"/>
+</svg>

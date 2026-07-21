@@ -1,0 +1,317 @@
+{
+  "api_base": {
+    "description": "Helldivers 2 社区 API 根地址",
+    "type": "string",
+    "hint": "默认使用官方社区 API",
+    "default": "https://api.helldivers2.dev"
+  },
+  "war_id": {
+    "description": "当前战争 ID",
+    "type": "int",
+    "hint": "赛季变更时可能需要修改，当前默认 801",
+    "default": 801
+  },
+  "api_contact": {
+    "description": "API 联系邮箱 (X-Super-Contact)",
+    "type": "string",
+    "hint": "建议填写真实邮箱，遵守 API 礼仪",
+    "default": ""
+  },
+  "api_client_name": {
+    "description": "API 客户端标识 (X-Super-Client)",
+    "type": "string",
+    "default": "astrbot_plugin_Helldivers"
+  },
+  "api_user_agent": {
+    "description": "User-Agent",
+    "type": "string",
+    "default": "astrbot_plugin_Helldivers/1.0"
+  },
+  "api_timeout": {
+    "description": "API 请求超时（秒）",
+    "type": "int",
+    "default": 30
+  },
+  "proxy_url": {
+    "description": "HTTP 代理（可选）",
+    "type": "string",
+    "hint": "例如 http://127.0.0.1:7890，留空不使用",
+    "default": ""
+  },
+  "enable_background_refresh": {
+    "description": "启用后台定时同步",
+    "type": "bool",
+    "hint": "关闭后仅在缓存缺失时按需拉取",
+    "default": true
+  },
+  "cache_update_interval": {
+    "description": "API 缓存刷新间隔（秒）",
+    "type": "int",
+    "hint": "建议 120–300。过短容易触发 429 限流",
+    "default": 180
+  },
+  "request_delay": {
+    "description": "批量请求间隔（秒）",
+    "type": "int",
+    "hint": "刷新多类数据时的请求间隔，建议 ≥3",
+    "default": 4
+  },
+  "min_request_interval": {
+    "description": "任意两次 API 请求最小间隔（秒）",
+    "type": "float",
+    "hint": "全局限流，降低 429 概率",
+    "default": 1.5
+  },
+  "retry_base_delay": {
+    "description": "API 重试基础延迟（秒）",
+    "type": "float",
+    "default": 5.0
+  },
+  "retry_max_delay": {
+    "description": "API 重试最大延迟（秒）",
+    "type": "float",
+    "default": 45.0
+  },
+  "retry_max_attempts": {
+    "description": "API 最大重试次数",
+    "type": "int",
+    "default": 3
+  },
+  "enable_translation": {
+    "description": "启用 AI 智能翻译",
+    "type": "bool",
+    "hint": "将最高命令/快讯/Steam 更新翻译为中文",
+    "default": true
+  },
+  "translation_mode": {
+    "description": "翻译模式",
+    "type": "string",
+    "hint": "builtin=第三方翻译接口；openai=OpenAI 兼容 chat/completions；auto=按地址和 Key 自动判断",
+    "options": ["auto", "builtin", "openai"],
+    "default": "auto"
+  },
+  "translation_api_url": {
+    "description": "翻译 API 地址",
+    "type": "string",
+    "hint": "builtin: 完整翻译端点；openai: base（如 https://api.openai.com/v1）或完整 /chat/completions 地址",
+    "default": "https://uapis.cn/api/v1/ai/translate"
+  },
+  "translation_api_key": {
+    "description": "翻译 API Key（openai 模式）",
+    "type": "string",
+    "hint": "OpenAI 兼容接口的 Bearer Token；builtin 模式可留空",
+    "default": ""
+  },
+  "translation_model": {
+    "description": "翻译模型名（openai 模式）",
+    "type": "string",
+    "hint": "如 gpt-4o-mini、deepseek-chat 等",
+    "default": "gpt-4o-mini"
+  },
+  "translation_timeout": {
+    "description": "翻译请求超时（秒）",
+    "type": "int",
+    "default": 30
+  },
+  "translation_target_lang": {
+    "description": "翻译目标语言",
+    "type": "string",
+    "default": "zh-CN"
+  },
+  "translation_retry_fallback_seconds": {
+    "description": "翻译失败回退缓存时间（秒）",
+    "type": "int",
+    "hint": "失败后只短暂保留英文原文，之后重新尝试翻译",
+    "default": 900
+  },
+  "rotation_dispatches": {
+    "description": "快讯翻译轮转间隔（秒）",
+    "type": "int",
+    "default": 300
+  },
+  "rotation_orders": {
+    "description": "最高命令翻译轮转间隔（秒）",
+    "type": "int",
+    "default": 600
+  },
+  "rotation_steam": {
+    "description": "Steam 更新翻译轮转间隔（秒）",
+    "type": "int",
+    "default": 900
+  },
+  "steam_max_content_length": {
+    "description": "Steam 更新内容最大长度",
+    "type": "int",
+    "default": 2000
+  },
+  "steam_balancing_limit": {
+    "description": "Steam 平衡性调整节最大长度",
+    "type": "int",
+    "default": 800
+  },
+  "steam_fixes_limit": {
+    "description": "Steam 修复节最大长度",
+    "type": "int",
+    "default": 600
+  },
+  "steam_issues_limit": {
+    "description": "Steam 已知问题节最大长度",
+    "type": "int",
+    "default": 300
+  },
+  "steam_max_sections": {
+    "description": "Steam 更新最多展示节数",
+    "type": "int",
+    "default": 3
+  },
+  "enable_wiki": {
+    "description": "启用 Helldivers Wiki 查询 (/wiki)",
+    "type": "bool",
+    "default": true
+  },
+  "wiki_base": {
+    "description": "Wiki 站点根地址",
+    "type": "string",
+    "default": "https://helldivers.wiki.gg"
+  },
+  "wiki_api_path": {
+    "description": "MediaWiki API 路径",
+    "type": "string",
+    "default": "/api.php"
+  },
+  "wiki_search_limit": {
+    "description": "Wiki 搜索候选数量",
+    "type": "int",
+    "hint": "建议 3–8",
+    "default": 5
+  },
+  "wiki_extract_chars": {
+    "description": "Wiki 摘要最大字符数",
+    "type": "int",
+    "default": 900
+  },
+  "wiki_prefer_hd2": {
+    "description": "优先 Helldivers 2 词条（过滤 Helldivers 1: 前缀）",
+    "type": "bool",
+    "default": true
+  },
+  "translate_wiki": {
+    "description": "自动翻译 Wiki 摘要为中文",
+    "type": "bool",
+    "hint": "依赖 enable_translation；失败回退英文",
+    "default": true
+  },
+  "wiki_cache_ttl": {
+    "description": "Wiki 词条缓存有效期（秒）",
+    "type": "int",
+    "hint": "默认 6 小时",
+    "default": 21600
+  },
+  "wiki_search_cache_ttl": {
+    "description": "Wiki 搜索结果缓存有效期（秒）",
+    "type": "int",
+    "default": 1800
+  },
+  "enable_map": {
+    "description": "启用 /map 战争地图（图片）",
+    "type": "bool",
+    "default": true
+  },
+  "map_cache_ttl": {
+    "description": "地图图片缓存有效期（秒）",
+    "type": "int",
+    "default": 600
+  },
+  "map_label_top_n": {
+    "description": "地图上标注的活跃星球数量",
+    "type": "int",
+    "default": 15
+  },
+  "map_visual_mode": {
+    "description": "地图视觉模式",
+    "type": "string",
+    "options": ["uploaded_reference", "derived"],
+    "hint": "uploaded_reference 使用上传的 map.png 作为圆形银河基底；derived 使用程序化地图",
+    "default": "uploaded_reference"
+  },
+  "ui_language": {
+    "description": "图片 UI 语言",
+    "type": "string",
+    "options": ["zh-CN"],
+    "default": "zh-CN"
+  },
+  "external_asset_mode": {
+    "description": "外部图片素材模式",
+    "type": "string",
+    "options": ["off", "cache_only", "prefetch"],
+    "hint": "默认关闭；外部 wiki 图片仅允许审核过的 manifest，本地用户素材不受影响",
+    "default": "off"
+  },
+  "wiki_asset_enabled": {
+    "description": "启用审核过的 Wiki 图片素材",
+    "type": "bool",
+    "hint": "需要显式 manifest；不会按关键词抓取图片",
+    "default": false
+  },
+  "asset_manifest_path": {
+    "description": "本地图片素材 manifest 路径",
+    "type": "string",
+    "default": ""
+  },
+  "personal_order_api_url": {
+    "description": "个人任务 JSON 数据源 URL（可选）",
+    "type": "string",
+    "hint": "Personal Order 不在公开社区 API 中；可填 diveharder 或其他代理地址",
+    "default": ""
+  },
+  "campaign_history_hours": {
+    "description": "战役趋势历史保留小时数",
+    "type": "float",
+    "hint": "用于 Warfront 与 Dashboard 的近期净推进速率，范围 1–3",
+    "default": 2
+  },
+  "campaign_rate_window_minutes": {
+    "description": "战役趋势采样窗口（分钟）",
+    "type": "float",
+    "hint": "用于计算 Recent Liberation Rate，范围 10–30",
+    "default": 20
+  },
+  "steam_appid": {
+    "description": "Steam 游戏 App ID",
+    "type": "int",
+    "default": 553850
+  },
+  "steam_news_count": {
+    "description": "Steam 新闻缓存数量",
+    "type": "int",
+    "hint": "官方公告接口一次获取的数量，建议 5–20",
+    "default": 10
+  },
+  "steam_image_enabled": {
+    "description": "启用 Steam 新闻主图",
+    "type": "bool",
+    "default": true
+  },
+  "remote_image_max_bytes": {
+    "description": "远程新闻图片最大字节数",
+    "type": "int",
+    "hint": "仅允许 Steam 官方 CDN，默认 8 MiB",
+    "default": 8388608
+  },
+  "remote_image_max_pixels": {
+    "description": "远程新闻图片最大解码像素",
+    "type": "int",
+    "default": 16000000
+  },
+  "image_cache_max_mb": {
+    "description": "远程图片缓存上限（MiB）",
+    "type": "int",
+    "default": 150
+  },
+  "dashboard_low_impact_threshold": {
+    "description": "Dashboard 低影响星球玩家数阈值",
+    "type": "int",
+    "hint": "低于该在线人数的进攻星球会折叠为「低影响星球」汇总，默认 800",
+    "default": 800
+  }
+}

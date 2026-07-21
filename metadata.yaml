@@ -1,0 +1,15 @@
+name: astrbot_plugin_Helldivers
+display_name: Helldivers 2 银河战争
+desc: Helldivers 2 银河战争图片情报站：Dashboard、详细统计、DSS、战术星图、全球事件、Steam 新闻、战线排行榜与 Wiki
+short_desc: HD2 战争情报图片 / DSS / 星图 / Steam
+help: 输入 /hd2 或 /help 查看帮助
+version: v1.5.1
+author: fiatlux2333
+repo: https://github.com/fiatlux2333/astrbot_plugin_Helldivers
+license: MIT
+astrbot_version: ">=4.16,<5"
+support_platforms:
+  - aiocqhttp
+  - qq_official
+  - telegram
+  - discord

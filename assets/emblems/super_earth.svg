@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+<title>Original Helldivers-inspired fan art asset</title>
+<desc>Original geometric vector artwork created for this plugin; no game screenshot or extracted texture.</desc>
+<polygon points="34,254 124,194 168,210 112,254 168,302 124,318" fill="#6eb9ef" fill-opacity="1.0000"/>
+<polygon points="478,254 388,194 344,210 400,254 344,302 388,318" fill="#6eb9ef" fill-opacity="1.0000"/>
+<polygon points="72,168 164,146 186,176 103,204" fill="#9dd8ff" fill-opacity="1.0000"/>
+<polygon points="440,168 348,146 326,176 409,204" fill="#9dd8ff" fill-opacity="1.0000"/>
+<ellipse cx="256.0" cy="256.0" rx="128.0" ry="128.0" fill="#102943" fill-opacity="1.0000" stroke="#dff4ff" stroke-opacity="1.0000" stroke-width="16" stroke-linejoin="round" stroke-linecap="round"/>
+<ellipse cx="256.0" cy="256.0" rx="102.0" ry="102.0" fill="#174d78" fill-opacity="1.0000" stroke="#6eb9ef" stroke-opacity="1.0000" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="256,158 256,354" fill="none" stroke="#dff4ff" stroke-opacity="0.7500" stroke-width="6" stroke-linejoin="round" stroke-linecap="round"/>
+<ellipse cx="256.0" cy="256.0" rx="72.0" ry="102.0" fill="none" stroke="#dff4ff" stroke-opacity="0.7000" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="164,214 348,214" fill="none" stroke="#dff4ff" stroke-opacity="0.7500" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="158,274 354,274" fill="none" stroke="#dff4ff" stroke-opacity="0.7500" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="205,196 242,178 274,192 286,220 270,239 236,231" fill="#78c88c" fill-opacity="1.0000"/>
+<polygon points="272,249 314,236 338,263 320,292 292,304 267,281" fill="#78c88c" fill-opacity="1.0000"/>
+<polygon points="256.0,194.0 271.87,234.16 314.97,236.84 281.68,264.34 292.44,306.16 256.0,283.0 219.56,306.16 230.32,264.34 197.03,236.84 240.13,234.16" fill="#f7df55" fill-opacity="1.0000" stroke="#fff3a0" stroke-opacity="1.0000" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="256,56 274,92 314,98 285,126 292,166 256,146 220,166 227,126 198,98 238,92" fill="#f4d94e" fill-opacity="1.0000"/>
+</svg>

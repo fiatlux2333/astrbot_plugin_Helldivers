@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720">
+<title>Original Helldivers-inspired fan art asset</title>
+<desc>Original geometric vector artwork created for this plugin; no game screenshot or extracted texture.</desc>
+<ellipse cx="600.0" cy="360.0" rx="420.0" ry="290.0" fill="none" stroke="#5594af" stroke-opacity="0.4471" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<ellipse cx="600.0" cy="360.0" rx="340.0" ry="240.0" fill="none" stroke="#5594af" stroke-opacity="0.4471" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="600,40 600,680" fill="none" stroke="#5594af" stroke-opacity="0.4471" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="100,360 1100,360" fill="none" stroke="#5594af" stroke-opacity="0.4471" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="600,55 632,190 622,554 600,676 578,554 568,190" fill="none" stroke="#dceef8" stroke-opacity="0.9098" stroke-width="8" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="120,318 315,260 885,260 1080,318 1052,410 856,450 344,450 148,410" fill="none" stroke="#dceef8" stroke-opacity="0.9098" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<ellipse cx="600.0" cy="351.0" rx="312.0" ry="115.0" fill="none" stroke="#f0d34f" stroke-opacity="0.9098" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<ellipse cx="600.0" cy="352.0" rx="200.0" ry="74.0" fill="none" stroke="#65c5ed" stroke-opacity="0.8000" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"/>
+<ellipse cx="600.0" cy="353.0" rx="80.0" ry="45.0" fill="none" stroke="#dceef8" stroke-opacity="0.9098" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="314,260 364,158 468,119 545,191 523,263" fill="none" stroke="#65c5ed" stroke-opacity="0.8000" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="886,260 836,158 732,119 655,191 677,263" fill="none" stroke="#65c5ed" stroke-opacity="0.8000" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="344,450 390,555 493,611 558,536 548,447" fill="none" stroke="#65c5ed" stroke-opacity="0.8000" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="856,450 810,555 707,611 642,536 652,447" fill="none" stroke="#65c5ed" stroke-opacity="0.8000" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"/>
+<ellipse cx="350.0" cy="354.0" rx="24.0" ry="24.0" fill="none" stroke="#f0d34f" stroke-opacity="0.9098" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+<ellipse cx="450.0" cy="354.0" rx="24.0" ry="24.0" fill="none" stroke="#f0d34f" stroke-opacity="0.9098" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+<ellipse cx="750.0" cy="354.0" rx="24.0" ry="24.0" fill="none" stroke="#f0d34f" stroke-opacity="0.9098" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+<ellipse cx="850.0" cy="354.0" rx="24.0" ry="24.0" fill="none" stroke="#f0d34f" stroke-opacity="0.9098" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="495,220 705,220" fill="none" stroke="#5594af" stroke-opacity="0.4471" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="495,500 705,500" fill="none" stroke="#5594af" stroke-opacity="0.4471" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="212,296 212,438" fill="none" stroke="#f0d34f" stroke-opacity="0.9098" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="988,296 988,438" fill="none" stroke="#f0d34f" stroke-opacity="0.9098" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="600.0,311.0 606.89,336.37 629.7,323.3 616.63,346.11 642.0,353.0 616.63,359.89 629.7,382.7 606.89,369.63 600.0,395.0 593.11,369.63 570.3,382.7 583.37,359.89 558.0,353.0 583.37,346.11 570.3,323.3 593.11,336.37" fill="#f0d34f" fill-opacity="0.9098"/>
+</svg>

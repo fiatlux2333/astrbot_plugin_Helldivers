@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+<title>Original Helldivers-inspired fan art asset</title>
+<desc>Original geometric vector artwork created for this plugin; no game screenshot or extracted texture.</desc>
+<polygon points="256,55 385,111 441,239 405,382 256,457 107,382 71,239 127,111" fill="#471a20" fill-opacity="1.0000" stroke="#f05a60" stroke-opacity="1.0000" stroke-width="13" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="143,166 211,124 301,124 369,166 391,278 343,365 296,399 216,399 169,365 121,278" fill="#241216" fill-opacity="1.0000" stroke="#ffd7d9" stroke-opacity="1.0000" stroke-width="8" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="149,210 224,185 217,273 151,261" fill="#f05a60" fill-opacity="1.0000" stroke="#ffd7d9" stroke-opacity="1.0000" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="363,210 288,185 295,273 361,261" fill="#f05a60" fill-opacity="1.0000" stroke="#ffd7d9" stroke-opacity="1.0000" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+<ellipse cx="194.5" cy="232.5" rx="20.5" ry="19.5" fill="#fff2e8" fill-opacity="1.0000"/>
+<ellipse cx="317.5" cy="232.5" rx="20.5" ry="19.5" fill="#fff2e8" fill-opacity="1.0000"/>
+<polygon points="211,302 256,276 301,302 286,360 226,360" fill="#681f25" fill-opacity="1.0000" stroke="#f05a60" stroke-opacity="1.0000" stroke-width="6" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="225" y="315" width="14" height="36" rx="2" fill="#ffd7d9" fill-opacity="1.0000"/>
+<rect x="247" y="315" width="14" height="36" rx="2" fill="#ffd7d9" fill-opacity="1.0000"/>
+<rect x="269" y="315" width="14" height="36" rx="2" fill="#ffd7d9" fill-opacity="1.0000"/>
+<polyline points="112,139 73,100 99,72" fill="none" stroke="#f05a60" stroke-opacity="1.0000" stroke-width="16" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="400,139 439,100 413,72" fill="none" stroke="#f05a60" stroke-opacity="1.0000" stroke-width="16" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="101,365 63,404 94,438" fill="none" stroke="#f05a60" stroke-opacity="1.0000" stroke-width="16" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="411,365 449,404 418,438" fill="none" stroke="#f05a60" stroke-opacity="1.0000" stroke-width="16" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

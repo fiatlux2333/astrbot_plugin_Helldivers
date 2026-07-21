@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+<title>Original Helldivers-inspired fan art asset</title>
+<desc>Original geometric vector artwork created for this plugin; no game screenshot or extracted texture.</desc>
+<ellipse cx="256.0" cy="256.0" rx="199.0" ry="199.0" fill="#2c1c13" fill-opacity="1.0000" stroke="#f39a45" stroke-opacity="1.0000" stroke-width="10" stroke-linejoin="round" stroke-linecap="round"/>
+<ellipse cx="315.0" cy="135.0" rx="52.0" ry="52.0" fill="#315c70" fill-opacity="1.0000" stroke="#6dc2ec" stroke-opacity="1.0000" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="315,132 257,222" fill="none" stroke="#fff0d6" stroke-opacity="1.0000" stroke-width="13" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="294,143 238,196" fill="none" stroke="#f39a45" stroke-opacity="1.0000" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="257,201 292,286 257,405 220,352 170,370 188,301 145,276 220,257" fill="#e65842" fill-opacity="1.0000" stroke="#fff0d6" stroke-opacity="1.0000" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="247,252 267,304 247,362 226,327 205,339 215,298 190,282" fill="#ffd45a" fill-opacity="1.0000"/>
+</svg>
