@@ -65,6 +65,14 @@
 
 阵营参数：`Terminids` / `Automaton` / `Illuminate`（中文：终结族 / 机器人 / 光能族）。
 
+## 情报数据展示
+
+<img width="666" height="888" alt="d41420176827f0c770a841df410fbf12" src="https://github.com/user-attachments/assets/0afedfbc-6abc-4bf7-98fb-c83bf8342bf0" />
+<img width="666" height="888" alt="5c28dd9cc9a73ae3e868409923fe7aa8" src="https://github.com/user-attachments/assets/38894c8a-2349-4265-943c-63a6e9de6508" />
+<img width="666" height="888" alt="23ba5b73c2f726825cf6656bcf677a98" src="https://github.com/user-attachments/assets/f7066508-100d-40dc-ab67-dceb1b3a6983" />
+<img width="888" height="888" alt="27df43c4beae10a4f91321c0d0527d94" src="https://github.com/user-attachments/assets/686e8abd-0a88-4f91-8031-5975953effff" />
+
+
 ## 🚀 快速开始
 
 ### 环境要求
