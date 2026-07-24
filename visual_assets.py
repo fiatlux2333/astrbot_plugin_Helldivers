@@ -36,6 +36,8 @@ _LOGICAL_ASSET_IDS = {
     "emblems/dss.png": "emblem.dss",
     "dss/dss_wireframe.png": "dss.wireframe",
     "user/map.png": "map.reference",
+    "user/map_template.png": "template.map",
+    "user/warfront_template.png": "template.warfront",
     "global_events/super_earth_flag.png": "global_event.default_flag",
     "tactical/eagle_storm.png": "tactical.eagle_storm",
     "tactical/heavy_ordnance.png": "tactical.heavy_ordnance",

@@ -22,7 +22,8 @@ from typing import Any, Iterable
 
 try:
     from .i18n import format_faction, format_planet, format_status, t
-    from .visual_assets import asset_image, asset_sha256
+    from .hud_theme import cockpit_backdrop, draw_chamfered_panel, draw_scanlines
+    from .visual_assets import asset_image, asset_sha256, paste_contain
 except Exception:  # pragma: no cover
     format_faction = lambda value, default=None: default or str(value)  # type: ignore
     format_planet = lambda value, default=None: default or str(value)  # type: ignore
@@ -30,6 +31,7 @@ except Exception:  # pragma: no cover
     t = lambda key, default=None: default or str(key)  # type: ignore
     asset_image = None  # type: ignore
     asset_sha256 = lambda value: ""  # type: ignore
+    paste_contain = None  # type: ignore
 
 try:
     from astrbot.api import logger
@@ -78,7 +80,7 @@ _BIOME_PALETTES: dict[str, tuple[tuple[int, int, int], ...]] = {
 
 _BG_INNER = (19, 31, 60)
 _BG_OUTER = (3, 5, 13)
-_RENDERER_VERSION = "map-renderer-hud5"
+_RENDERER_VERSION = "map-renderer-v5"
 _TAU = math.tau
 
 
@@ -242,7 +244,7 @@ class MapRenderer:
         self._last_ts: float = 0
         self._last_fingerprint = ""
         self.header_h = 70
-        self.footer_h = 96
+        self.footer_h = 150
         self.plot_top = self.header_h + 10
         self.plot_size = min(
             self.width - 40,
@@ -1061,120 +1063,126 @@ class MapRenderer:
 
     def _draw_chrome(
         self,
+        image: "Image.Image",
         draw: "ImageDraw.ImageDraw",
         points: list[dict[str, Any]],
         title: str,
         subtitle: str,
     ) -> None:
-        font_s = _find_font(13)
+        font_s = _find_font(12)
         font_m = _find_font(16, True)
-        font_l = _find_font(24, True)
-        font_xl = _find_font(28, True)
-        # Cockpit top bar
-        draw.rectangle((0, 0, self.width, self.header_h), fill=(6, 10, 18, 250))
-        draw.line(
-            (0, self.header_h, self.width, self.header_h),
-            fill=(70, 150, 210, 220),
-            width=2,
-        )
+        font_l = _find_font(25, True)
+        draw.rectangle((0, 0, self.width, self.header_h), fill=(7, 17, 29, 238))
+        draw.line((0, self.header_h - 2, self.width, self.header_h - 2), fill=(78, 118, 151, 230), width=2)
         if font_l:
+            draw.text((28, 17), "GALACTIC WAR MAP · HELLDIVERS 2", fill=(231, 241, 251, 255), font=font_l)
+        if font_s and subtitle:
+            text_width = draw.textlength(subtitle, font=font_s)
             draw.text(
-                (28, 18),
-                "GALACTIC WAR MAP · HELLDIVERS 2",
-                fill=(230, 240, 255, 255),
-                font=font_l,
-            )
-        stamp = subtitle or title
-        if font_s and stamp:
-            text_width = draw.textlength(stamp, font=font_s)
-            draw.text(
-                (self.width - text_width - 28, 26),
-                stamp,
-                fill=(150, 190, 220, 255),
+                (self.width - text_width - 28, 27),
+                subtitle,
+                fill=(151, 173, 207, 255),
                 font=font_s,
             )
 
         footer_y = self.height - self.footer_h
-        draw.rectangle((0, footer_y, self.width, self.height), fill=(6, 10, 18, 250))
-        draw.line((0, footer_y, self.width, footer_y), fill=(70, 150, 210, 220), width=2)
-
-        # Three HUD panels: zone key / online / legend
-        panel_gap = 14
-        panel_w = (self.width - 40 - panel_gap * 2) // 3
-        panels = [
-            (20, "ZONE ALLOCATION KEY"),
-            (20 + panel_w + panel_gap, "COMMAND SECTOR READOUT"),
-            (20 + (panel_w + panel_gap) * 2, "TACTICAL LEGEND"),
-        ]
-        for px, label in panels:
-            draw.rounded_rectangle(
-                (px, footer_y + 10, px + panel_w, self.height - 12),
-                radius=10,
-                outline=(60, 110, 150, 200),
-                width=1,
-                fill=(12, 20, 32, 230),
+        draw.rectangle((0, footer_y - 8, self.width, self.height), fill=(5, 11, 18, 246))
+        draw.line((0, footer_y - 8, self.width, footer_y - 8), fill=(84, 120, 145, 230), width=3)
+        gap = 12
+        margin = 16
+        available = self.width - margin * 2 - gap * 2
+        left_w = int(available * 0.33)
+        center_w = int(available * 0.35)
+        right_w = available - left_w - center_w
+        panel_top = footer_y + 4
+        panel_bottom = self.height - 12
+        left_box = (margin, panel_top, margin + left_w, panel_bottom)
+        center_box = (left_box[2] + gap, panel_top, left_box[2] + gap + center_w, panel_bottom)
+        right_box = (center_box[2] + gap, panel_top, center_box[2] + gap + right_w, panel_bottom)
+        for box in (left_box, center_box, right_box):
+            draw_chamfered_panel(
+                draw,
+                box,
+                fill=(8, 19, 29, 242),
+                outline=(102, 132, 151, 230),
+                accent=(111, 171, 202, 230),
+                cut=9,
+                width=2,
             )
-            if font_s:
-                draw.text((px + 14, footer_y + 16), label, fill=(120, 170, 210, 255), font=font_s)
-
-        # Left: faction zones
+        if font_s:
+            draw.text((left_box[0] + 18, panel_top + 8), "ZONE ALLOCATION KEY", fill=(225, 236, 245, 255), font=font_s)
+            draw.text((center_box[0] + 18, panel_top + 8), "COMMAND SECTOR READOUT", fill=(225, 236, 245, 255), font=font_s)
+            draw.text((right_box[0] + 18, panel_top + 8), "TACTICAL LEGEND", fill=(225, 236, 245, 255), font=font_s)
+        draw.line((left_box[0] + 12, panel_top + 28, left_box[2] - 12, panel_top + 28), fill=(75, 106, 125, 180), width=1)
+        draw.line((center_box[0] + 12, panel_top + 28, center_box[2] - 12, panel_top + 28), fill=(75, 106, 125, 180), width=1)
+        draw.line((right_box[0] + 12, panel_top + 28, right_box[2] - 12, panel_top + 28), fill=(75, 106, 125, 180), width=1)
         legend = [
             ("超级地球", "Humans"),
             ("机器人", "Automaton"),
             ("终结族", "Terminids"),
             ("光能族", "Illuminate"),
         ]
-        x = 34
-        y = footer_y + 42
-        for name, faction in legend:
+        cell_w = max(60, (left_box[2] - left_box[0] - 24) // 4)
+        for index, (name, faction) in enumerate(legend):
+            x = left_box[0] + 12 + index * cell_w
+            y = panel_top + 38
             color = FACTION_COLORS[faction]
-            draw.ellipse((x, y, x + 14, y + 14), fill=(*color, 255), outline=(255, 255, 255, 80))
-            if font_s:
-                draw.text((x + 20, y - 1), name, fill=(220, 230, 240, 255), font=font_s)
-                x += 28 + int(draw.textlength(name, font=font_s))
+            emblem = asset_image(f"emblems/{'super_earth' if faction == 'Humans' else faction.lower()}.png") if asset_image else None
+            if emblem is not None and paste_contain is not None:
+                paste_contain(image, emblem, (x + 6, y, cell_w - 12, 48))
             else:
-                x += 90
+                draw.ellipse((x + cell_w // 2 - 20, y + 2, x + cell_w // 2 + 20, y + 42), fill=(*color, 230), outline=(225, 235, 242, 180), width=2)
+            if font_s:
+                label_w = draw.textlength(name, font=font_s)
+                draw.text((x + (cell_w - label_w) / 2, y + 52), name, fill=(*color, 255), font=font_s)
 
-        # Center: online divers
         active_count = sum(1 for point in points if point["active"])
         defense_count = sum(1 for point in points if point["defense"])
         total_players = sum(point["players"] for point in points)
-        cx = panels[1][0] + 16
-        if font_xl:
-            draw.text(
-                (cx, footer_y + 38),
-                f"ONLINE DIVERS: {total_players:,}",
-                fill=(120, 220, 255, 255),
-                font=font_xl,
-            )
+        cx = center_box[0] + 20
+        cy = panel_top + 40
+        draw.ellipse((cx, cy, cx + 44, cy + 44), fill=(41, 183, 220, 230), outline=(183, 238, 248, 230), width=2)
+        draw.ellipse((cx + 11, cy + 11, cx + 20, cy + 20), fill=(5, 29, 42, 255))
+        draw.ellipse((cx + 25, cy + 11, cx + 34, cy + 20), fill=(5, 29, 42, 255))
+        draw.rectangle((cx + 15, cy + 29, cx + 29, cy + 35), fill=(5, 29, 42, 255))
+        if font_m:
+            draw.text((cx + 58, cy + 3), f"ONLINE DIVERS: {total_players:,}", fill=(111, 218, 244, 255), font=font_m)
         if font_s:
-            draw.text(
-                (cx, footer_y + 72),
-                f"活跃战役 {active_count}   防御 {defense_count}   星球 {len(points)}",
-                fill=(180, 200, 220, 255),
-                font=font_s,
-            )
-
-        # Right: tactical marks
+            draw.text((center_box[0] + 18, panel_top + 92), f"活跃战役 {active_count}", fill=(235, 218, 121, 255), font=font_s)
+            draw.text((center_box[0] + center_w // 3 + 8, panel_top + 92), f"防御事件 {defense_count}", fill=(235, 218, 121, 255), font=font_s)
+            draw.text((center_box[0] + center_w * 2 // 3, panel_top + 92), f"争夺星球 {len(points)}", fill=(235, 218, 121, 255), font=font_s)
         if font_s:
-            marks = [
-                "○ 活跃战区",
-                "🛡 防御交战",
-                "◇ 战略事件",
-                "◎ DSS 任务",
-                "→ 进攻方向",
+            icons = [
+                ("活跃", (235, 239, 244), "ring"),
+                ("防御", (68, 153, 238), "shield"),
+                ("事件", (245, 190, 62), "diamond"),
+                ("DSS", (43, 213, 220), "target"),
+                ("进攻", (239, 92, 87), "arrow"),
             ]
-            # Avoid emoji for consistency; use text marks
-            marks = ["白环 活跃", "蓝盾 防御", "黄菱 事件", "青环 DSS", "箭头 进攻"]
-            mx = panels[2][0] + 16
-            my = footer_y + 42
-            for i, mark in enumerate(marks):
-                draw.text((mx + (i % 3) * 100, my + (i // 3) * 22), mark, fill=(200, 215, 230, 255), font=font_s)
+            icon_w = max(48, (right_box[2] - right_box[0] - 20) // len(icons))
+            for index, (label, color, kind) in enumerate(icons):
+                x = right_box[0] + 10 + index * icon_w
+                center_x = x + icon_w // 2
+                center_y = panel_top + 58
+                if kind == "ring":
+                    draw.ellipse((center_x - 17, center_y - 17, center_x + 17, center_y + 17), outline=(*color, 255), width=4)
+                elif kind == "shield":
+                    draw.polygon([(center_x, center_y - 20), (center_x + 17, center_y - 12), (center_x + 13, center_y + 13), (center_x, center_y + 21), (center_x - 13, center_y + 13), (center_x - 17, center_y - 12)], outline=(*color, 255))
+                elif kind == "diamond":
+                    draw.polygon([(center_x, center_y - 19), (center_x + 19, center_y), (center_x, center_y + 19), (center_x - 19, center_y)], outline=(*color, 255))
+                elif kind == "target":
+                    draw.ellipse((center_x - 17, center_y - 17, center_x + 17, center_y + 17), outline=(*color, 255), width=3)
+                    draw.line((center_x - 23, center_y, center_x + 23, center_y), fill=(*color, 255), width=2)
+                    draw.line((center_x, center_y - 23, center_x, center_y + 23), fill=(*color, 255), width=2)
+                else:
+                    draw.polygon([(center_x - 20, center_y - 12), (center_x + 18, center_y), (center_x - 20, center_y + 12), (center_x - 8, center_y)], fill=(*color, 255))
+                label_w = draw.textlength(label, font=font_s)
+                draw.text((center_x - label_w / 2, panel_top + 91), label, fill=(202, 214, 226, 255), font=font_s)
 
     def _prune_cache(self, keep: Path) -> None:
         cutoff = time.time() - self.cache_ttl
         try:
-            for path in self.output_dir.glob("map_v4_*.png"):
+            for path in self.output_dir.glob("map_v5_*.png"):
                 if path != keep and path.stat().st_mtime < cutoff:
                     path.unlink(missing_ok=True)
         except OSError:
@@ -1190,7 +1198,14 @@ class MapRenderer:
             fitted = reference.resize(
                 (self.plot_size, self.plot_size), Image.Resampling.LANCZOS
             )
-            canvas = Image.new("RGBA", (self.width, self.height), (*_BG_OUTER, 255))
+            canvas = cockpit_backdrop(
+                "user/map_template.png",
+                (self.width, self.height),
+                blur=3.5,
+                darkness=72,
+                tint=(3, 10, 16),
+            )
+            draw_scanlines(canvas, step=5, alpha=8)
             # The uploaded map already contains the high-fidelity sector topology,
             # labels, and route network. Keep it as the base plate and alpha-composite
             # live status layers above it.
@@ -1213,7 +1228,7 @@ class MapRenderer:
 
         normalised = self._normalise_points(points)
         fingerprint = self._fingerprint(normalised, title, subtitle)
-        out = self.output_dir / f"map_v4_{fingerprint}.png"
+        out = self.output_dir / f"map_v5_{fingerprint}.png"
         if not force and out.exists():
             self._last_path = out
             self._last_ts = time.time()
@@ -1249,7 +1264,7 @@ class MapRenderer:
                 self._draw_sector_labels(draw, sectors)
                 self._draw_faction_labels(draw, normalised)
             self._draw_point_labels(draw, normalised, coords)
-            self._draw_chrome(draw, normalised, title, subtitle)
+            self._draw_chrome(img, draw, normalised, title, subtitle)
 
             img.convert("RGB").save(temp, format="PNG", optimize=True)
             temp.replace(out)

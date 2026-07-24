@@ -25,6 +25,8 @@ class LocalizationAssetTests(unittest.TestCase):
             "dss/dss_wireframe.png": (925, 769),
             "user/map.png": (1149, 1149),
             "global_events/super_earth_flag.png": (752, 348),
+            "user/map_template.png": (1024, 1024),
+            "user/warfront_template.png": (1024, 1002),
             "emblems/terminids.png": (512, 512),
             "emblems/automaton.png": (512, 512),
             "emblems/illuminate.png": (512, 512),

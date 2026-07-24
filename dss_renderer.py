@@ -52,7 +52,7 @@ except Exception:  # pragma: no cover - direct module execution
 
 WIDTH = 1200
 HEIGHT = 960
-VERSION = "hud5"
+VERSION = "4"
 
 _BG = (6, 14, 23, 255)
 _PANEL = (10, 25, 38, 242)
@@ -720,22 +720,19 @@ def _draw_blueprint(
     )
     draw.text(
         (x0 + 24, y0 + 48),
-        _ellipsize(draw, planet_name, _font(13), x1 - x0 - 48),
+        _ellipsize(draw, planet_name.upper(), _font(13), x1 - x0 - 48),
         font=_font(13),
         fill=_MUTED,
     )
-    center = ((x0 + x1) // 2, y0 + 360)
-    # Soft planet orb behind the station silhouette.
-    planet = _procedural_planet(220, f"{planet_name}|blueprint")
-    image.alpha_composite(
-        planet, (center[0] - planet.width // 2, center[1] - planet.height // 2 - 20)
-    )
+    center = ((x0 + x1) // 2, y0 + 376)
     asset = _dss_asset(station)
     if asset is not None:
-        fitted = _contain(asset, (x1 - x0 - 80, 480))
+        fitted = _contain(asset, (x1 - x0 - 72, 510))
         alpha = fitted.getchannel("A")
         px = center[0] - fitted.width // 2
-        py = center[1] - fitted.height // 2 + 10
+        py = center[1] - fitted.height // 2
+        # Transparent line art gets a soft glow. Opaque uploaded artwork keeps its
+        # original deep-space background without producing a rectangular halo.
         if alpha.getextrema()[0] < 255:
             glow_alpha = alpha.filter(ImageFilter.GaussianBlur(18)).point(
                 lambda v: min(210, v)
@@ -1336,7 +1333,7 @@ class DSSRenderer:
     def _render_image(self, station: Mapping[str, Any], now_utc: datetime) -> Any:
         base = Image.new("RGBA", (WIDTH, HEIGHT), _BG)
         draw = ImageDraw.Draw(base, "RGBA")
-        # Deep cockpit bloom + grid.
+        # Background technical grid and restrained blue atmospheric bloom.
         _draw_grid(draw, (0, 0, WIDTH, HEIGHT), 48)
         bloom = Image.new("RGBA", base.size, (0, 0, 0, 0))
         bdraw = ImageDraw.Draw(bloom, "RGBA")
@@ -1346,44 +1343,36 @@ class DSSRenderer:
         draw = ImageDraw.Draw(base, "RGBA")
 
         planet = _mapping(station.get("planet"))
-        planet_name = format_planet(
-            _safe_text(
-                _first(planet, ("name", "planetName")),
-                _safe_text(station.get("planetName"), "未知轨道"),
-            ),
-            "未知轨道",
+        planet_name = _safe_text(
+            _first(planet, ("name", "planetName")),
+            _safe_text(station.get("planetName"), "未知轨道"),
         )
-        # Gold DSS command header.
-        draw.rectangle((0, 0, WIDTH, 88), fill=(10, 18, 28, 250))
-        draw.line((0, 87, WIDTH, 87), fill=_YELLOW, width=2)
-        draw.rounded_rectangle((24, 16, 96, 72), radius=12, fill=(40, 30, 12, 255), outline=_YELLOW, width=2)
-        draw.text((40, 28), "DSS", font=_font(20, True), fill=_YELLOW)
-        draw.text((112, 20), "民主空间站", font=_font(22, True), fill=_TEXT)
-        draw.text((113, 52), "战略指挥链路 // 实时遥测", font=_font(11), fill=_MUTED)
+        draw.rectangle((0, 0, WIDTH, 82), fill=(7, 20, 31, 248))
+        draw.line((0, 81, WIDTH, 81), fill=_CYAN, width=2)
+        draw.text((30, 16), "DSS", font=_font(34, True), fill=_TEXT)
+        draw.text(
+            (122, 17), "民主空间站", font=_font(19, True), fill=_CYAN
+        )
+        draw.text(
+            (123, 47),
+            "战略指挥链路 // 实时遥测",
+            font=_font(10),
+            fill=_MUTED,
+        )
         local_now, utc_now = _exact_time(now_utc, self.local_timezone)
         stamp = f"快照  本地 {local_now}  //  UTC {utc_now}"
-        stamp_w = _text_width(draw, stamp, _font(10, True))
-        draw.text((WIDTH - stamp_w - 28, 34), stamp, font=_font(10, True), fill=_DIM)
+        stamp_w = _text_width(draw, stamp, _font(9, True))
+        draw.text((WIDTH - stamp_w - 28, 29), stamp, font=_font(9, True), fill=_DIM)
 
-        left_box = (24, 108, 500, 920)
-        planet_box = (520, 108, 1176, 340)
-        actions_box = (520, 358, 1176, 920)
+        left_box = (24, 104, 494, 934)
+        planet_box = (516, 104, 1176, 334)
+        actions_box = (516, 354, 1176, 934)
         _draw_blueprint(base, station, planet_name, left_box)
         _draw_planet(base, station, planet, planet_box, now_utc, self.local_timezone)
         _draw_actions(base, station, actions_box, now_utc)
         draw = ImageDraw.Draw(base, "RGBA")
-        # Super Earth seal corner.
-        try:
-            from .visual_assets import asset_image, paste_contain
-
-            seal = asset_image("emblems/super_earth.png")
-            if seal is not None:
-                paste_contain(base, seal, (400, 820, 80, 80))
-        except Exception:
-            pass
-        footer = "超级地球武装部队 // DSS // api.helldivers2.dev"
-        draw.text((28, 936), footer, font=_font(10, True), fill=_DIM)
-        draw.text((WIDTH // 2 - 120, 936), footer, font=_font(10, True), fill=_DIM)
+        footer = "超级地球武装部队 // DSS 遥测 // api.helldivers2.dev"
+        draw.text((28, 942), footer, font=_font(8, True), fill=_DIM)
 
         if (self.width, self.height) != (WIDTH, HEIGHT):
             return base.resize(

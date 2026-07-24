@@ -46,7 +46,7 @@ PLUGIN_AUTHOR = "fiatlux2333"
 PLUGIN_DESC = (
     "Helldivers 2 银河战争图片情报：Dashboard、统计、DSS、星图、事件、Steam 与战线排行"
 )
-PLUGIN_VERSION = "v1.5.1"
+PLUGIN_VERSION = "v1.6.0"
 
 HELP_TEXT = """\
 Helldivers 2 银河战争 {version}

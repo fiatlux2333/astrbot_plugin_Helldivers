@@ -63,6 +63,22 @@
       "original_sha1": null,
       "media_type": "image/png"
     },
+    "template.map": {
+      "user": {"path": "map_template.png", "sha256": "72b35a5b04dc4d65cd32b606cef81db117d72e94c81f4ab3b77c48231151c574"},
+      "attribution": "User-provided map visual reference",
+      "source_url": null,
+      "license": "user-provided",
+      "original_sha1": null,
+      "media_type": "image/png"
+    },
+    "template.warfront": {
+      "user": {"path": "warfront_template.png", "sha256": "7a8087f1f846fde853d533cbc0c8533ae14f47eb6449488689e07e92c6721875"},
+      "attribution": "User-provided warfront visual reference",
+      "source_url": null,
+      "license": "user-provided",
+      "original_sha1": null,
+      "media_type": "image/png"
+    },
     "global_event.default_flag": {
       "user": {"path": "super_earth_flag.png", "sha256": "e916e51321fb94d6df6f51a0854bb04e4fc5b128841dcba5af7d8b4ce3dce38f"},
       "bundled": {"path": "global_events/super_earth_flag.png", "sha256": "6aea8cc4339ad0569ef2f1776bd215bc2acc71fc9aeac5086ce673369210210e"},

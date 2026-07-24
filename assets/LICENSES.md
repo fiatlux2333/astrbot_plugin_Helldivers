@@ -12,6 +12,7 @@ Unless noted below, SVG and PNG files in this directory are original fan-art-lik
 - `tactical/eagle_storm.*`, `tactical/orbital_blockade.*`, and `tactical/heavy_ordnance.*` are user-provided DSS tactical icons. Their SVG source credits Dogo314; the bundled PNGs are direct local rasterizations of those sources.
 - `user/dss.png` is the user-provided DSS reference image used by the DSS report renderer.
 - `user/super_earth_flag.png` is the user-provided Super Earth flag reference used for major-order and global-event artwork.
+- `user/*_template.png` files are user-provided visual references used as darkened cockpit backplates beneath dynamic report data.
 
 ## License
 
