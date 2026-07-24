@@ -446,17 +446,30 @@ def _draw_table(
     header_font = _font(15, bold=True)
     body_font = _font(16)
 
+    # Glass outer frame
+    draw.rounded_rectangle(
+        (
+            table_left,
+            y,
+            table_left + table_width,
+            y + TABLE_TITLE_H + COLUMN_HEADER_H + ROW_H * 10,
+        ),
+        radius=12,
+        outline=_blend(GRID, accent, 0.45),
+        width=1,
+    )
     draw.rounded_rectangle(
         (table_left, y, table_left + table_width, y + TABLE_TITLE_H),
-        radius=7,
-        fill=_blend(PANEL, accent, 0.16),
+        radius=10,
+        fill=_blend(PANEL, accent, 0.22),
     )
     draw.rectangle((table_left, y, table_left + 6, y + TABLE_TITLE_H), fill=accent)
-    draw.text((table_left + 18, y + 8), heading, font=title_font, fill=TEXT)
+    draw.text((table_left + 18, y + 8), f"· {heading}", font=title_font, fill=TEXT)
     y += TABLE_TITLE_H
 
     draw.rectangle(
-        (table_left, y, table_left + table_width, y + COLUMN_HEADER_H), fill=HEADER_BG
+        (table_left, y, table_left + table_width, y + COLUMN_HEADER_H),
+        fill=_blend(HEADER_BG, accent, 0.08),
     )
     x = table_left
     for label, width, alignment in _COLUMNS:
@@ -497,7 +510,44 @@ def _draw_table(
             )
             if row is None:
                 fill = _blend(TEXT_MUTED, BG, 0.35)
-            _draw_cell_text(draw, value, body_font, x, y, width, ROW_H, alignment, fill)
+            # Liberation column: mini progress bar under percent text.
+            if row is not None and column_index == 3:
+                pct = _row_liberation(row)
+                bar_x0 = x + 8
+                bar_x1 = x + width - 8
+                bar_y = y + ROW_H - 10
+                draw.rounded_rectangle(
+                    (bar_x0, bar_y, bar_x1, bar_y + 5),
+                    radius=2,
+                    fill=(40, 48, 62),
+                )
+                fill_w = max(0, int((bar_x1 - bar_x0) * pct / 100.0))
+                if fill_w > 2:
+                    bar_color = SUCCESS if pct >= 50 else accent
+                    draw.rounded_rectangle(
+                        (bar_x0, bar_y, bar_x0 + fill_w, bar_y + 5),
+                        radius=2,
+                        fill=bar_color,
+                    )
+            # Result badge-like emphasis
+            if row is not None and column_index == 6 and fill in {SUCCESS, DANGER}:
+                badge_pad = 6
+                display = truncate_text(draw, value, body_font, width - badge_pad * 2 - 8)
+                tw = _text_width(draw, display, body_font)
+                bx = x + width - 10 - tw - badge_pad * 2
+                by = y + 6
+                draw.rounded_rectangle(
+                    (bx, by, bx + tw + badge_pad * 2, by + ROW_H - 12),
+                    radius=6,
+                    fill=_blend(BG, fill, 0.22),
+                    outline=fill,
+                    width=1,
+                )
+                draw.text((bx + badge_pad, by + 5), display, font=body_font, fill=fill)
+            else:
+                _draw_cell_text(
+                    draw, value, body_font, x, y, width, ROW_H, alignment, fill
+                )
             x += width
             if x < table_left + table_width:
                 draw.line((x, y, x, y + ROW_H), fill=GRID, width=1)
@@ -580,10 +630,21 @@ def render_warfront(
     table_h = TABLE_TITLE_H + COLUMN_HEADER_H + ROW_H * 10
     height = TITLE_H + table_h * 2 + SECTION_GAP + defense_h + BOTTOM_PAD
 
+    # Metallic gradient background
     image = Image.new("RGB", (WIDTH, height), BG)
     draw = ImageDraw.Draw(image)
-    draw.rectangle((0, 0, WIDTH, 5), fill=accent)
-    draw.rectangle((0, 5, WIDTH, TITLE_H), fill=_blend(BG, accent, 0.07))
+    for yy in range(height):
+        t = yy / max(1, height - 1)
+        c = tuple(int(BG[i] * (1 - t * 0.25) + 8 * t) for i in range(3))
+        draw.line((0, yy, WIDTH, yy), fill=c)
+    # Brushed metal header
+    for yy in range(TITLE_H):
+        t = yy / max(1, TITLE_H - 1)
+        base = tuple(int(34 * (1 - t) + 18 * t) for _ in range(3))
+        tint = _blend(base, accent, 0.12)
+        draw.line((0, yy, WIDTH, yy), fill=tint)
+    draw.rectangle((0, 0, WIDTH, 4), fill=accent)
+    draw.line((0, TITLE_H - 1, WIDTH, TITLE_H - 1), fill=_blend(GRID, accent, 0.4), width=1)
 
     emblem_size = 58
     emblem_x = MARGIN_X
@@ -610,11 +671,8 @@ def render_warfront(
     heading = title or f"{faction_label}战线"
     title_x = emblem_x + emblem_size + 20
     draw.text((title_x, 22), heading, font=title_font, fill=TEXT)
-    detail = subtitle.strip() or f"共 {len(normalized_rows)} 条活跃战役"
+    detail = subtitle.strip() or f"玩家数与解放进度各 Top 10 · 共 {len(normalized_rows)} 条活跃战役"
     draw.text((title_x, 62), detail, font=subtitle_font, fill=TEXT_MUTED)
-    draw.line(
-        (MARGIN_X, TITLE_H - 1, WIDTH - MARGIN_X, TITLE_H - 1), fill=GRID, width=1
-    )
 
     y = TITLE_H
     y = _draw_table(draw, by_players, y=y, heading="玩家数 Top 10", accent=accent)

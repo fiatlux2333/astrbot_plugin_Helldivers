@@ -467,6 +467,20 @@ _PLANET_NAMES: Final[dict[str, str]] = {
     "lastofe": "拉斯托夫", "diluvium": "迪卢维乌姆", "vandalon iv": "万达隆四号",
     "rictus": "里克图斯", "septron": "塞普特隆", "effluvia": "埃弗卢维亚",
     "monarch": "君主",
+    "wezen": "威森",
+    "gatria": "加特里亚",
+    "charon prime": "卡戎一号",
+    "vega bay": "织女海湾",
+    "mintoria": "明托里亚",
+    "matar bay": "马塔尔湾",
+    "aurora bay": "极光湾",
+    "heze bay": "赫西湾",
+    "new stockholm": "新斯德哥尔摩",
+    "grafmere": "格拉夫米尔",
+    "alamak vii": "阿拉马克七号",
+    "oasis": "绿洲",
+    "yed prior": "叶德·普赖尔",
+    "gaellivare": "盖利瓦雷",
 }
 
 _DSS_ACTION_NAMES: Final[dict[str, str]] = {

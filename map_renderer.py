@@ -78,7 +78,7 @@ _BIOME_PALETTES: dict[str, tuple[tuple[int, int, int], ...]] = {
 
 _BG_INNER = (19, 31, 60)
 _BG_OUTER = (3, 5, 13)
-_RENDERER_VERSION = "map-renderer-v4.1"
+_RENDERER_VERSION = "map-renderer-hud5"
 _TAU = math.tau
 
 
@@ -1068,80 +1068,108 @@ class MapRenderer:
     ) -> None:
         font_s = _find_font(13)
         font_m = _find_font(16, True)
-        font_l = _find_font(25, True)
-        draw.rectangle((0, 0, self.width, self.header_h), fill=(8, 12, 24, 250))
+        font_l = _find_font(24, True)
+        font_xl = _find_font(28, True)
+        # Cockpit top bar
+        draw.rectangle((0, 0, self.width, self.header_h), fill=(6, 10, 18, 250))
         draw.line(
             (0, self.header_h, self.width, self.header_h),
-            fill=(52, 83, 128, 255),
+            fill=(70, 150, 210, 220),
             width=2,
         )
         if font_l:
-            draw.text((28, 17), title, fill=(241, 246, 255, 255), font=font_l)
-        if font_s and subtitle:
-            text_width = draw.textlength(subtitle, font=font_s)
             draw.text(
-                (self.width - text_width - 28, 27),
-                subtitle,
-                fill=(151, 173, 207, 255),
+                (28, 18),
+                "GALACTIC WAR MAP · HELLDIVERS 2",
+                fill=(230, 240, 255, 255),
+                font=font_l,
+            )
+        stamp = subtitle or title
+        if font_s and stamp:
+            text_width = draw.textlength(stamp, font=font_s)
+            draw.text(
+                (self.width - text_width - 28, 26),
+                stamp,
+                fill=(150, 190, 220, 255),
                 font=font_s,
             )
 
         footer_y = self.height - self.footer_h
-        draw.rectangle(
-            (0, footer_y, self.width, self.height),
-            fill=(8, 12, 24, 250),
-        )
-        draw.line(
-            (0, footer_y, self.width, footer_y),
-            fill=(52, 83, 128, 255),
-            width=2,
-        )
+        draw.rectangle((0, footer_y, self.width, self.height), fill=(6, 10, 18, 250))
+        draw.line((0, footer_y, self.width, footer_y), fill=(70, 150, 210, 220), width=2)
+
+        # Three HUD panels: zone key / online / legend
+        panel_gap = 14
+        panel_w = (self.width - 40 - panel_gap * 2) // 3
+        panels = [
+            (20, "ZONE ALLOCATION KEY"),
+            (20 + panel_w + panel_gap, "COMMAND SECTOR READOUT"),
+            (20 + (panel_w + panel_gap) * 2, "TACTICAL LEGEND"),
+        ]
+        for px, label in panels:
+            draw.rounded_rectangle(
+                (px, footer_y + 10, px + panel_w, self.height - 12),
+                radius=10,
+                outline=(60, 110, 150, 200),
+                width=1,
+                fill=(12, 20, 32, 230),
+            )
+            if font_s:
+                draw.text((px + 14, footer_y + 16), label, fill=(120, 170, 210, 255), font=font_s)
+
+        # Left: faction zones
         legend = [
-            ("人类", "Humans"),
-            ("终结族", "Terminids"),
+            ("超级地球", "Humans"),
             ("机器人", "Automaton"),
+            ("终结族", "Terminids"),
             ("光能族", "Illuminate"),
         ]
-        x = 28
-        y = footer_y + 18
+        x = 34
+        y = footer_y + 42
         for name, faction in legend:
             color = FACTION_COLORS[faction]
-            draw.ellipse((x, y, x + 13, y + 13), fill=(*color, 255))
-            if faction == "Automaton":
-                draw.line(
-                    (x + 1, y + 12, x + 12, y + 1), fill=(40, 24, 24, 210), width=2
-                )
-            elif faction == "Terminids":
-                draw.ellipse((x + 5, y + 5, x + 7, y + 7), fill=(50, 42, 17, 220))
-            elif faction == "Illuminate":
-                draw.line((x + 2, y + 2, x + 11, y + 11), fill=(45, 27, 59, 220))
-                draw.line((x + 11, y + 2, x + 2, y + 11), fill=(45, 27, 59, 220))
+            draw.ellipse((x, y, x + 14, y + 14), fill=(*color, 255), outline=(255, 255, 255, 80))
             if font_s:
-                draw.text((x + 19, y - 2), name, fill=(211, 220, 234, 255), font=font_s)
-                x += 48 + int(draw.textlength(name, font=font_s))
+                draw.text((x + 20, y - 1), name, fill=(220, 230, 240, 255), font=font_s)
+                x += 28 + int(draw.textlength(name, font=font_s))
             else:
-                x += 105
+                x += 90
 
+        # Center: online divers
         active_count = sum(1 for point in points if point["active"])
         defense_count = sum(1 for point in points if point["defense"])
         total_players = sum(point["players"] for point in points)
-        stats = (
-            f"活跃战役 {active_count}   防御 {defense_count}   "
-            f"星球 {len(points)}   在线 {total_players:,}"
-        )
-        if font_m:
+        cx = panels[1][0] + 16
+        if font_xl:
             draw.text(
-                (28, footer_y + 53), stats, fill=(185, 207, 239, 255), font=font_m
+                (cx, footer_y + 38),
+                f"ONLINE DIVERS: {total_players:,}",
+                fill=(120, 220, 255, 255),
+                font=font_xl,
             )
         if font_s:
-            marks = "白环 活跃   蓝盾 防御   黄菱 事件   青环 DSS   箭头 进攻"
-            width = draw.textlength(marks, font=font_s)
             draw.text(
-                (self.width - width - 28, footer_y + 55),
-                marks,
-                fill=(144, 164, 194, 255),
+                (cx, footer_y + 72),
+                f"活跃战役 {active_count}   防御 {defense_count}   星球 {len(points)}",
+                fill=(180, 200, 220, 255),
                 font=font_s,
             )
+
+        # Right: tactical marks
+        if font_s:
+            marks = [
+                "○ 活跃战区",
+                "🛡 防御交战",
+                "◇ 战略事件",
+                "◎ DSS 任务",
+                "→ 进攻方向",
+            ]
+            # Avoid emoji for consistency; use text marks
+            marks = ["白环 活跃", "蓝盾 防御", "黄菱 事件", "青环 DSS", "箭头 进攻"]
+            mx = panels[2][0] + 16
+            my = footer_y + 42
+            for i, mark in enumerate(marks):
+                draw.text((mx + (i % 3) * 100, my + (i // 3) * 22), mark, fill=(200, 215, 230, 255), font=font_s)
 
     def _prune_cache(self, keep: Path) -> None:
         cutoff = time.time() - self.cache_ttl

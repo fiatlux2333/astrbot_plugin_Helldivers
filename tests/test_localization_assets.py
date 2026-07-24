@@ -49,7 +49,8 @@ class LocalizationAssetTests(unittest.TestCase):
     def test_official_planets_and_dss_actions_are_localized(self) -> None:
         self.assertEqual(format_planet("Heeth"), "希斯")
         self.assertEqual(format_planet("Klen Dahal II"), "克莱恩·达哈尔二号")
-        self.assertEqual(format_planet("Gaellivare", "未知星球"), "Gaellivare")
+        self.assertEqual(format_planet("Gaellivare", "未知星球"), "盖利瓦雷")
+        self.assertEqual(format_planet("Wezen"), "威森")
         self.assertEqual(format_dss_action("Eagle Storm"), "飞鹰风暴")
         self.assertEqual(format_dss_action("Orbital Blockade"), "轨道封锁")
         self.assertEqual(
