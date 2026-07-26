@@ -1,5 +1,5 @@
 name: astrbot_plugin_Helldivers
-display_name:绝地潜兵2数据查询助手
+display_name: 绝地潜兵2数据查询助手
 desc: 绝地潜兵2 图片情报：游戏数据查询、最高命令、游戏快讯、DSS、战术星图、全球事件、Steam 新闻、战线排行榜与 Wiki
 short_desc: HD2 战争情报图片 / DSS / 星图 / Steam
 help: 输入 /hd2 或 /help 查看帮助
