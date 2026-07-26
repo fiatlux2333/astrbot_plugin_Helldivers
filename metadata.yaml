@@ -4,7 +4,7 @@ desc: 绝地潜兵2 图片情报：游戏数据查询、最高命令、游戏快
 short_desc: HD2 战争情报图片 / DSS / 星图 / Steam
 help: 输入 /hd2 或 /help 查看帮助
 version: v1.6.0
-author: fiatlux2333
+author: 牡蛎
 repo: https://github.com/fiatlux2333/astrbot_plugin_Helldivers
 license: MIT
 astrbot_version: ">=4.16,<5"
