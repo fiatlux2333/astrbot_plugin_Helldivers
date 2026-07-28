@@ -125,14 +125,17 @@ class ApiClientTests(unittest.IsolatedAsyncioTestCase):
             def __init__(self) -> None:
                 super().__init__()
                 self.max_attempts = None
+                self.failure_is_warning = None
 
             async def request_json(self, method, path, **kwargs):
                 self.max_attempts = kwargs.get("max_attempts")
+                self.failure_is_warning = kwargs.get("failure_is_warning")
                 return None
 
         client = RecordingClient()
         self.assertIsNone(await client.fetch_steam_updates_official())
         self.assertEqual(client.max_attempts, 1)
+        self.assertTrue(client.failure_is_warning)
 
     async def test_steam_news_falls_back_to_community_source(self) -> None:
         class FallbackClient(HD2Client):

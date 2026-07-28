@@ -117,6 +117,7 @@ class HD2Client:
         json_body: dict[str, Any] | None = None,
         extra_headers: dict[str, str] | None = None,
         max_attempts: int | None = None,
+        failure_is_warning: bool = False,
     ) -> Any:
         url = self._url(path)
         headers = dict(self.headers)
@@ -127,6 +128,7 @@ class HD2Client:
             if max_attempts is None
             else max(1, int(max_attempts))
         )
+        log_failure = logger.warning if failure_is_warning else logger.error
 
         last_error: Exception | None = None
         for attempt in range(1, attempts + 1):
@@ -173,7 +175,7 @@ class HD2Client:
 
                     if resp.status == 429:
                         self._note_rate_limit(self._parse_retry_after(resp))
-                    logger.error(
+                    log_failure(
                         f"HD2 API {method} {url} failed status={resp.status} body={body_preview}"
                     )
                     return None
@@ -206,11 +208,11 @@ class HD2Client:
                     )
                     await asyncio.sleep(delay)
                     continue
-                logger.error(f"HD2 API {method} {url} final error: {error_text}")
+                log_failure(f"HD2 API {method} {url} final error: {error_text}")
                 return None
 
         if last_error:
-            logger.error(
+            log_failure(
                 f"HD2 API {method} {url} exhausted retries: "
                 f"{self._format_error(last_error)}"
             )
@@ -273,7 +275,9 @@ class HD2Client:
         )
         # A community endpoint is available as a fallback, so do not block the
         # entire cache refresh with repeated long waits on Steam's API.
-        data = await self.request_json("GET", url, max_attempts=1)
+        data = await self.request_json(
+            "GET", url, max_attempts=1, failure_is_warning=True
+        )
         if not isinstance(data, dict):
             return None
         appnews = data.get("appnews")
@@ -320,7 +324,7 @@ class HD2Client:
         official = await self.fetch_steam_updates_official()
         if official is not None:
             return official
-        logger.warning(
+        logger.info(
             "[HD2] Steam official news unavailable; using community fallback"
         )
         return await self.fetch_steam_updates_community()
