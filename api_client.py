@@ -102,6 +102,13 @@ class HD2Client:
         except (TypeError, ValueError):
             return None
 
+    @staticmethod
+    def _format_error(error: Exception) -> str:
+        """Keep exception-only diagnostics useful when the message is empty."""
+        detail = str(error).strip()
+        name = type(error).__name__
+        return f"{name}: {detail}" if detail else name
+
     async def request_json(
         self,
         method: str,
@@ -109,14 +116,20 @@ class HD2Client:
         *,
         json_body: dict[str, Any] | None = None,
         extra_headers: dict[str, str] | None = None,
+        max_attempts: int | None = None,
     ) -> Any:
         url = self._url(path)
         headers = dict(self.headers)
         if extra_headers:
             headers.update(extra_headers)
+        attempts = (
+            self.retry_max_attempts
+            if max_attempts is None
+            else max(1, int(max_attempts))
+        )
 
         last_error: Exception | None = None
-        for attempt in range(1, self.retry_max_attempts + 1):
+        for attempt in range(1, attempts + 1):
             try:
                 await self._throttle()
                 session = await self.get_session()
@@ -136,10 +149,7 @@ class HD2Client:
                     except Exception:
                         pass
 
-                    if (
-                        resp.status in self.RETRY_STATUSES
-                        and attempt < self.retry_max_attempts
-                    ):
+                    if resp.status in self.RETRY_STATUSES and attempt < attempts:
                         retry_after = self._parse_retry_after(resp)
                         if resp.status == 429:
                             self._note_rate_limit(retry_after)
@@ -156,7 +166,7 @@ class HD2Client:
                         delay *= 1 + random.uniform(0, 0.15)
                         logger.warning(
                             f"HD2 API {method} {url} status={resp.status}, "
-                            f"retry {attempt}/{self.retry_max_attempts} after {delay:.1f}s"
+                            f"retry {attempt}/{attempts} after {delay:.1f}s"
                         )
                         await asyncio.sleep(delay)
                         continue
@@ -171,6 +181,7 @@ class HD2Client:
                 raise
             except Exception as e:
                 last_error = e
+                error_text = self._format_error(e)
                 err_s = str(e).lower()
                 # DNS / 主机不存在：重试无意义，快速失败
                 non_retryable = (
@@ -180,24 +191,29 @@ class HD2Client:
                     or "name resolution" in err_s
                 )
                 if non_retryable:
-                    logger.warning(f"HD2 API {method} {url} non-retryable error: {e}")
+                    logger.warning(
+                        f"HD2 API {method} {url} non-retryable error: {error_text}"
+                    )
                     return None
-                if attempt < self.retry_max_attempts:
+                if attempt < attempts:
                     delay = min(
                         self.retry_base_delay * attempt,
                         self.retry_max_delay,
                     )
                     logger.warning(
-                        f"HD2 API {method} {url} error={e}, "
-                        f"retry {attempt}/{self.retry_max_attempts} after {delay:.1f}s"
+                        f"HD2 API {method} {url} error={error_text}, "
+                        f"retry {attempt}/{attempts} after {delay:.1f}s"
                     )
                     await asyncio.sleep(delay)
                     continue
-                logger.error(f"HD2 API {method} {url} final error: {e}")
+                logger.error(f"HD2 API {method} {url} final error: {error_text}")
                 return None
 
         if last_error:
-            logger.error(f"HD2 API {method} {url} exhausted retries: {last_error}")
+            logger.error(
+                f"HD2 API {method} {url} exhausted retries: "
+                f"{self._format_error(last_error)}"
+            )
         return None
 
     async def get_json(self, path: str) -> Any:
@@ -255,7 +271,9 @@ class HD2Client:
             f"?appid={appid}&count={count}"
             "&maxlength=0&feeds=steam_community_announcements&format=json"
         )
-        data = await self.get_json(url)
+        # A community endpoint is available as a fallback, so do not block the
+        # entire cache refresh with repeated long waits on Steam's API.
+        data = await self.request_json("GET", url, max_attempts=1)
         if not isinstance(data, dict):
             return None
         appnews = data.get("appnews")
@@ -302,6 +320,9 @@ class HD2Client:
         official = await self.fetch_steam_updates_official()
         if official is not None:
             return official
+        logger.warning(
+            "[HD2] Steam official news unavailable; using community fallback"
+        )
         return await self.fetch_steam_updates_community()
 
     async def fetch_steam_metadata(self) -> Optional[dict[str, Any]]:

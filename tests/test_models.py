@@ -27,6 +27,13 @@ from astrbot_plugin_Helldivers.war_state import WarState, campaign_faction
 
 
 class ModelTests(unittest.TestCase):
+    def test_api_error_formatter_keeps_empty_timeout_useful(self) -> None:
+        self.assertEqual(HD2Client._format_error(TimeoutError()), "TimeoutError")
+        self.assertEqual(
+            HD2Client._format_error(ValueError("bad response")),
+            "ValueError: bad response",
+        )
+
     def test_assignment_normalization_predicate(self) -> None:
         self.assertFalse(HD2Client._looks_like_assignment({}))
         self.assertFalse(HD2Client._looks_like_assignment({"data": []}))
@@ -110,6 +117,33 @@ class ModelTests(unittest.TestCase):
         self.assertIn("Hello & democracy", parsed.plain_text)
         self.assertEqual(len(parsed.image_candidates), 1)
         self.assertIn("steamstatic.com", parsed.image_candidates[0])
+
+
+class ApiClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_official_steam_news_uses_single_attempt(self) -> None:
+        class RecordingClient(HD2Client):
+            def __init__(self) -> None:
+                super().__init__()
+                self.max_attempts = None
+
+            async def request_json(self, method, path, **kwargs):
+                self.max_attempts = kwargs.get("max_attempts")
+                return None
+
+        client = RecordingClient()
+        self.assertIsNone(await client.fetch_steam_updates_official())
+        self.assertEqual(client.max_attempts, 1)
+
+    async def test_steam_news_falls_back_to_community_source(self) -> None:
+        class FallbackClient(HD2Client):
+            async def fetch_steam_updates_official(self, appid=None, count=None):
+                return None
+
+            async def fetch_steam_updates_community(self):
+                return [{"id": "fallback"}]
+
+        updates = await FallbackClient().fetch_steam_updates()
+        self.assertEqual(updates, [{"id": "fallback"}])
 
 
 if __name__ == "__main__":
