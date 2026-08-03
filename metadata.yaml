@@ -1,19 +1,19 @@
 name: astrbot_plugin_Helldivers
 display_name: 绝地潜兵2数据查询助手
-short_desc: HD2 战争情报图片 / DSS / 星图 / Steam
+short_desc: HD2 银河战争情报 / DSS / 地图 / Steam
 desc: |
   绝地潜兵2 图片情报插件。提供以下功能：
 
   - 银河战争统计数据
-  - 最高命令（Major Orders）实时追踪
-  - 游戏快讯（Dispatches）
+  - 重要指令（Major Orders）实时追踪
+  - 战役简报（Dispatches）
   - DSS 战术状态
-  - 战术星图（Galactic War Map）
+  - 银河战争地图（Galactic War Map）
   - 全球事件（Global Events）
   - Steam 官方更新公告
-  - 战线排行榜
+  - 战线战况
   - Helldivers Wiki 查询
-version: 1.6.0
+version: 1.8.2
 author: 牡蛎
 repo: https://github.com/fiatlux2333/astrbot_plugin_Helldivers
 astrbot_version: ">=4.16,<5"
@@ -26,4 +26,4 @@ tags:
   - helldivers
   - game
   - image
-  -情报
+  - 情报

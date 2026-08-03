@@ -3,8 +3,9 @@
 指令:
   /stats /hd2stats /dashboard /order /news /steam /wiki
   /major_order /personal_order /map /dss
-  /global_events /dispatches /warfront /planet
-  /hd2 | /help
+/global_events /dispatches /warfront /planet
+/银河快报
+/hd2 | /help
 """
 
 from __future__ import annotations
@@ -16,12 +17,20 @@ from pathlib import Path
 from typing import Any, Optional
 
 from astrbot.api import logger
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.message_components import Image, Plain
 from astrbot.api.star import Context, Star
 from astrbot.core.config.astrbot_config import AstrBotConfig
 
 from .api_client import HD2Client
+from .bilibili_monitor import (
+    BilibiliAuthenticationError,
+    BilibiliMonitor,
+    BilibiliPost,
+    BilibiliRiskControlError,
+    GALAXY_NEWS_UID,
+    LEGACY_GALAXY_NEWS_UID,
+)
 from .visual_assets import configure_asset_manifest
 from .awaiting_orders_renderer import AwaitingOrdersRenderer
 from .cache import CacheService, get_plugin_data_dir
@@ -33,6 +42,12 @@ from .dispatch_renderer import DispatchRenderer
 from .global_event_renderer import GlobalEventRenderer
 from .map_renderer import MapRenderer
 from .major_order_renderer import MajorOrderRenderer
+from .plugin_info import (
+    PLUGIN_AUTHOR,
+    PLUGIN_NAME,
+    PLUGIN_VERSION,
+    USER_AGENT,
+)
 from .remote_image_cache import RemoteImageCache
 from .services import HelldiversService
 from .stats_renderer import StatsRenderer
@@ -41,12 +56,9 @@ from .translator import TranslationCache, TranslationService
 from .warfront_renderer import WarfrontRenderer
 from .wiki_client import WikiCache, WikiClient
 
-PLUGIN_NAME = "astrbot_plugin_Helldivers"
-PLUGIN_AUTHOR = "fiatlux2333"
 PLUGIN_DESC = (
     "Helldivers 2 银河战争图片情报：Dashboard、统计、DSS、星图、事件、Steam 与战线排行"
 )
-PLUGIN_VERSION = "v1.6.0"
 
 HELP_TEXT = """\
 Helldivers 2 银河战争 {version}
@@ -65,6 +77,7 @@ Helldivers 2 银河战争 {version}
 /steam              Steam 新闻图片
 【文本】
 /wiki <关键词>      Helldivers Wiki
+/银河快报           立即获取最新一期银河快报
 /hd2 或 /help       本帮助
 ━━━━━━━━━━━━━━━━━━━━
 阵营: Terminids/Automaton/Illuminate
@@ -123,6 +136,8 @@ class HelldiversPlugin(Star):
         super().__init__(context)
         self.config = config or {}
         self.service: Optional[HelldiversService] = None
+        self.bilibili_monitor: BilibiliMonitor | None = None
+        self.bilibili_auto_enabled = False
 
     def _cfg(self, key: str, default: Any = None) -> Any:
         if self.config is None:
@@ -158,7 +173,7 @@ class HelldiversPlugin(Star):
             client_name=str(self._cfg("api_client_name", "astrbot_plugin_Helldivers")),
             contact=str(self._cfg("api_contact", "") or ""),
             user_agent=str(
-                self._cfg("api_user_agent", "astrbot_plugin_Helldivers/1.0")
+                self._cfg("api_user_agent", USER_AGENT)
             ),
             timeout=int(self._cfg("api_timeout", 30) or 30),
             proxy_url=str(self._cfg("proxy_url", "") or ""),
@@ -193,7 +208,7 @@ class HelldiversPlugin(Star):
             timeout=int(self._cfg("translation_timeout", 30) or 30),
             target_lang=str(self._cfg("translation_target_lang", "zh") or "zh"),
             user_agent=str(
-                self._cfg("api_user_agent", "astrbot_plugin_Helldivers/1.0")
+                self._cfg("api_user_agent", USER_AGENT)
             ),
             proxy_url=str(self._cfg("proxy_url", "") or ""),
             enabled=enable_translation,
@@ -205,11 +220,6 @@ class HelldiversPlugin(Star):
             ),
         )
         logger.info("[HD2] translation provider: %s", translator.diagnostic())
-
-        try:
-            translator.bind_session(await client.get_session())
-        except Exception as e:
-            logger.warning(f"[HD2] bind translation session failed: {e}")
 
         translation_cache = TranslationCache(
             data_dir,
@@ -231,7 +241,7 @@ class HelldiversPlugin(Star):
                 base_url=str(self._cfg("wiki_base", "https://helldivers.wiki.gg")),
                 api_path=str(self._cfg("wiki_api_path", "/api.php") or "/api.php"),
                 user_agent=str(
-                    self._cfg("api_user_agent", "astrbot_plugin_Helldivers/1.0")
+                    self._cfg("api_user_agent", USER_AGENT)
                 ),
                 timeout=int(self._cfg("api_timeout", 30) or 30),
                 proxy_url=str(self._cfg("proxy_url", "") or ""),
@@ -242,11 +252,6 @@ class HelldiversPlugin(Star):
                 retry_base_delay=float(self._cfg("retry_base_delay", 2.0) or 2.0),
                 cache=wiki_cache,
             )
-            try:
-                wiki_client.bind_session(await client.get_session())
-            except Exception as e:
-                logger.warning(f"[HD2] bind wiki session failed: {e}")
-
         manifest_path = str(self._cfg("asset_manifest_path", "") or "").strip()
         configure_asset_manifest(manifest_path or None)
 
@@ -277,14 +282,10 @@ class HelldiversPlugin(Star):
             * 1024
             * 1024,
             user_agent=str(
-                self._cfg("api_user_agent", "astrbot_plugin_Helldivers/1.5")
+                self._cfg("api_user_agent", USER_AGENT)
             ),
             proxy_url=str(self._cfg("proxy_url", "") or ""),
         )
-        try:
-            remote_image_cache.bind_session(await client.get_session())
-        except Exception as e:
-            logger.warning(f"[HD2] bind remote image cache session failed: {e}")
         campaign_trends = CampaignTrendStore(
             data_dir / "campaign_history.json",
             window_minutes=float(self._cfg("campaign_rate_window_minutes", 20) or 20),
@@ -315,6 +316,9 @@ class HelldiversPlugin(Star):
             map_renderer=map_renderer,
             enable_map=bool(self._cfg("enable_map", True)),
             personal_order_api_url=str(self._cfg("personal_order_api_url", "") or ""),
+            allow_private_personal_order_url=bool(
+                self._cfg("allow_private_personal_order_url", False)
+            ),
             card_renderer=card_renderer,
             dashboard_renderer=dashboard_renderer,
             stats_renderer=stats_renderer,
@@ -334,6 +338,84 @@ class HelldiversPlugin(Star):
 
         await self.service.start()
 
+        configured_bilibili_uid = str(
+            self._cfg("bilibili_uid", GALAXY_NEWS_UID) or GALAXY_NEWS_UID
+        ).strip()
+        if configured_bilibili_uid == LEGACY_GALAXY_NEWS_UID:
+            logger.warning(
+                "[HD2] 已自动修正银河快报旧 UID：%s -> %s",
+                LEGACY_GALAXY_NEWS_UID,
+                GALAXY_NEWS_UID,
+            )
+            configured_bilibili_uid = GALAXY_NEWS_UID
+        self.bilibili_monitor = BilibiliMonitor(
+            data_dir / "bilibili_galaxy_news",
+            uid=configured_bilibili_uid,
+            keyword=str(self._cfg("bilibili_keyword", "银河快报") or "银河快报"),
+            interval=int(self._cfg("bilibili_poll_interval", 300) or 300),
+            cookie=str(self._cfg("bilibili_cookie", "") or ""),
+            proxy_url=str(self._cfg("proxy_url", "") or ""),
+            timeout=int(self._cfg("api_timeout", 30) or 30),
+            max_image_bytes=int(
+                self._cfg("bilibili_image_max_bytes", 12 * 1024 * 1024)
+                or 12 * 1024 * 1024
+            ),
+            send_post=self._send_bilibili_post,
+            log_info=logger.info,
+            log_warning=logger.warning,
+            image_cache=RemoteImageCache(
+                data_dir / "bilibili_galaxy_news" / "secure_images_v3",
+                allowed_hosts=frozenset(
+                    {
+                        "i0.hdslb.com",
+                        "i1.hdslb.com",
+                        "i2.hdslb.com",
+                        "archive.biliimg.com",
+                        "album.biliimg.com",
+                    }
+                ),
+                max_bytes=int(
+                    self._cfg("bilibili_image_max_bytes", 12 * 1024 * 1024)
+                    or 12 * 1024 * 1024
+                ),
+                max_pixels=int(
+                    self._cfg("bilibili_image_max_pixels", 32000000)
+                    or 32000000
+                ),
+                max_cache_bytes=int(self._cfg("image_cache_max_mb", 150) or 150)
+                * 1024
+                * 1024,
+                user_agent=str(
+                    self._cfg(
+                        "api_user_agent",
+                        USER_AGENT,
+                    )
+                ),
+                proxy_url=str(self._cfg("proxy_url", "") or ""),
+                negative_ttl=60,
+                request_headers={
+                    "Referer": "https://www.bilibili.com/",
+                },
+            ),
+        )
+        self.bilibili_auto_enabled = bool(
+            self._cfg("enable_bilibili_galaxy_news", False)
+        )
+        if self.bilibili_auto_enabled:
+            if not self.bilibili_monitor.has_login_cookie:
+                logger.warning(
+                    "[HD2] 银河快报后台监听未启动：bilibili_cookie 缺少 SESSDATA。"
+                    "请填写浏览器登录后的完整 B站 Cookie 并重载插件。"
+                )
+            else:
+                await self.bilibili_monitor.start()
+                logger.info(
+                    "[HD2] Bilibili galaxy news enabled: uid=%s keyword=%s sessions=%s",
+                    self.bilibili_monitor.uid,
+                    self.bilibili_monitor.keyword,
+                    len(self.bilibili_monitor.sessions),
+                )
+
         contact = str(self._cfg("api_contact", "") or "").strip()
         if not contact:
             logger.warning(
@@ -342,6 +424,13 @@ class HelldiversPlugin(Star):
         logger.info(f"[HD2] plugin initialized {PLUGIN_VERSION}, data_dir={data_dir}")
 
     async def terminate(self) -> None:
+        if self.bilibili_monitor is not None:
+            try:
+                await self.bilibili_monitor.stop()
+            except Exception as e:
+                logger.warning(f"[HD2] Bilibili monitor stop error: {e}")
+            self.bilibili_monitor = None
+        self.bilibili_auto_enabled = False
         if self.service is not None:
             try:
                 await self.service.stop()
@@ -350,12 +439,132 @@ class HelldiversPlugin(Star):
             self.service = None
         logger.info("[HD2] plugin terminated")
 
+    async def _send_bilibili_post(
+        self,
+        post: BilibiliPost,
+        image_paths: list[Path],
+        sessions: list[str],
+    ) -> None:
+        if not sessions:
+            logger.info(
+                "[HD2] matched Bilibili dynamic %s, but no QQ group subscribed",
+                post.dynamic_id,
+            )
+            return
+        text = post.text or "（该动态没有文字内容）"
+        delivered = 0
+        for unified_msg_origin in sessions:
+            try:
+                chain = MessageChain().message(f"【{post.author}】\n{text}")
+                for path in image_paths:
+                    chain.file_image(str(path))
+                chain.message(f"\n原动态：{post.url}")
+                await self.context.send_message(
+                    unified_msg_origin,
+                    chain,
+                )
+                delivered += 1
+            except Exception as e:
+                logger.warning(
+                    "[HD2] Bilibili push failed: session=%s dynamic=%s error=%s",
+                    unified_msg_origin,
+                    post.dynamic_id,
+                    e,
+                )
+        if delivered == 0:
+            raise RuntimeError(
+                f"Bilibili dynamic {post.dynamic_id} failed for all subscribed groups"
+            )
+
     def _svc(self) -> HelldiversService:
         if self.service is None:
             raise RuntimeError("插件尚未初始化完成")
         return self.service
 
     # ---- help ----
+
+    @filter.command("银河快报", alias=["银河快报推送", "galaxy_news"])
+    @_command_handler
+    async def cmd_galaxy_news(
+        self, event: AstrMessageEvent
+    ) -> AsyncGenerator[Any, None]:
+        """立即获取并发送最新一期 B站银河快报。"""
+        monitor = self.bilibili_monitor
+        if monitor is None:
+            yield event.plain_result("❌ 银河快报服务尚未初始化完成。")
+            return
+        try:
+            posts = await monitor.fetch_posts()
+            post = monitor.latest_matching(posts)
+            if post is None:
+                previews = [
+                    f"{item.dynamic_id}:{item.text[:40]!r}" for item in posts[:5]
+                ]
+                logger.warning(
+                    "[HD2] no Bilibili keyword match: keyword=%r posts=%s previews=%s",
+                    monitor.keyword,
+                    len(posts),
+                    previews,
+                )
+                if posts and not any(item.text for item in posts):
+                    yield event.plain_result(
+                        "❌ B站返回了动态，但正文结构暂时无法识别，请查看日志中的动态 ID。"
+                    )
+                    return
+                yield event.plain_result(
+                    f"ℹ️ 最近的动态中没有找到关键字“{monitor.keyword}”。"
+                )
+                return
+            paths = await monitor.download_images(post)
+            components: list[Any] = [Plain(f"【{post.author}】\n{post.text}")]
+            components.extend(Image.fromFileSystem(str(path)) for path in paths)
+            components.append(Plain(f"\n原动态：{post.url}"))
+            yield event.chain_result(components)
+        except (BilibiliAuthenticationError, BilibiliRiskControlError) as e:
+            logger.warning(f"[HD2] manual Bilibili galaxy news blocked: {e}")
+            yield event.plain_result(f"❌ {e}")
+        except Exception as e:
+            logger.warning(f"[HD2] manual Bilibili galaxy news error: {e}")
+            yield event.plain_result("❌ 获取银河快报失败，请查看 AstrBot 日志。")
+
+    @filter.command("银河快报订阅", alias=["galaxy_news_subscribe"])
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
+    @_command_handler
+    async def cmd_galaxy_news_subscribe(
+        self, event: AstrMessageEvent
+    ) -> AsyncGenerator[Any, None]:
+        """在当前群订阅 B站“银河快报”动态推送。"""
+        if self.bilibili_monitor is None or not self.bilibili_auto_enabled:
+            yield event.plain_result(
+                "❌ 银河快报监听未启用，请先在插件配置中开启。"
+            )
+            return
+        origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        if not origin:
+            yield event.plain_result("❌ 无法获取当前群会话标识，请检查适配器。")
+            return
+        if self.bilibili_monitor.subscribe(origin):
+            yield event.plain_result("✅ 已订阅银河快报，新动态将自动同步到本群。")
+        else:
+            yield event.plain_result("ℹ️ 本群已经订阅银河快报。")
+
+    @filter.command("银河快报退订", alias=["galaxy_news_unsubscribe"])
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
+    @_command_handler
+    async def cmd_galaxy_news_unsubscribe(
+        self, event: AstrMessageEvent
+    ) -> AsyncGenerator[Any, None]:
+        """取消当前群的 B站“银河快报”动态推送。"""
+        if self.bilibili_monitor is None:
+            yield event.plain_result("ℹ️ 银河快报监听当前未启用。")
+            return
+        origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        if origin and self.bilibili_monitor.unsubscribe(origin):
+            yield event.plain_result("✅ 已取消本群的银河快报订阅。")
+        else:
+            yield event.plain_result("ℹ️ 本群尚未订阅银河快报。")
 
     @filter.command("hd2", alias={"helldivers", "help"})
     @_command_handler

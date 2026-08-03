@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import sys
 import tempfile
 import types
@@ -20,13 +22,30 @@ if "astrbot.api" not in sys.modules:
     sys.modules["astrbot.api"] = api
 
 from astrbot_plugin_Helldivers.api_client import HD2Client
+from astrbot_plugin_Helldivers.cache import CacheService
 from astrbot_plugin_Helldivers.campaign_trends import CampaignTrendStore
+from astrbot_plugin_Helldivers.services import HelldiversService
+from astrbot_plugin_Helldivers.remote_image_cache import ALLOWED_IMAGE_MIMES
 from astrbot_plugin_Helldivers.stats_model import build_stats_view_model
 from astrbot_plugin_Helldivers.steam_parser import parse_steam_content
+from astrbot_plugin_Helldivers.translator import TranslationCache, TranslationService
 from astrbot_plugin_Helldivers.war_state import WarState, campaign_faction
 
 
 class ModelTests(unittest.TestCase):
+    def test_bilibili_long_image_pixel_limit_covers_current_report(self) -> None:
+        schema = json.loads(
+            (Path(__file__).parents[1] / "_conf_schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        limit = schema["bilibili_image_max_pixels"]["default"]
+        self.assertEqual(limit, 32_000_000)
+        self.assertGreater(limit, 2_606 * 8_186)
+
+    def test_remote_image_cache_does_not_advertise_avif(self) -> None:
+        self.assertNotIn("image/avif", ALLOWED_IMAGE_MIMES)
+
     def test_api_error_formatter_keeps_empty_timeout_useful(self) -> None:
         self.assertEqual(HD2Client._format_error(TimeoutError()), "TimeoutError")
         self.assertEqual(
@@ -120,6 +139,57 @@ class ModelTests(unittest.TestCase):
 
 
 class ApiClientTests(unittest.IsolatedAsyncioTestCase):
+    def test_external_url_validation_rejects_private_targets(self) -> None:
+        for url in (
+            "http://example.com/data.json",
+            "https://127.0.0.1/data.json",
+            "https://[::1]/data.json",
+            "https://localhost/data.json",
+            "https://user:pass@example.com/data.json",
+        ):
+            with self.subTest(url=url):
+                with self.assertRaises(ValueError):
+                    HD2Client._external_url_target(url, allow_private=False)
+        self.assertEqual(
+            HD2Client._external_url_target(
+                "https://example.com/data.json", allow_private=False
+            ),
+            ("example.com", 443),
+        )
+        self.assertEqual(
+            HD2Client._external_url_target(
+                "http://127.0.0.1:8080/data.json", allow_private=True
+            ),
+            ("127.0.0.1", 8080),
+        )
+
+    def test_external_hosts_do_not_receive_hd2_contact_headers(self) -> None:
+        client = HD2Client(contact="contact@example.com")
+        hd2_headers = client._headers_for_url(
+            "https://api.helldivers2.dev/api/v1/war"
+        )
+        steam_headers = client._headers_for_url(
+            "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/"
+        )
+        self.assertEqual(hd2_headers["X-Super-Contact"], "contact@example.com")
+        self.assertNotIn("X-Super-Contact", steam_headers)
+        self.assertNotIn("X-Super-Client", steam_headers)
+
+    async def test_personal_order_does_not_mutate_client_settings(self) -> None:
+        class RecordingClient(HD2Client):
+            async def request_external_json(self, url, **kwargs):
+                self.external_kwargs = kwargs
+                return []
+
+        client = RecordingClient(retry_max_attempts=3, timeout=30)
+        original_timeout = client.timeout
+        result = await client.fetch_personal_order("https://example.com/order.json")
+        self.assertEqual(result, [])
+        self.assertEqual(client.retry_max_attempts, 3)
+        self.assertIs(client.timeout, original_timeout)
+        self.assertEqual(client.external_kwargs["timeout"], 10.0)
+        self.assertFalse(client.external_kwargs["allow_private"])
+
     async def test_official_steam_news_uses_single_attempt(self) -> None:
         class RecordingClient(HD2Client):
             def __init__(self) -> None:
@@ -147,6 +217,82 @@ class ApiClientTests(unittest.IsolatedAsyncioTestCase):
 
         updates = await FallbackClient().fetch_steam_updates()
         self.assertEqual(updates, [{"id": "fallback"}])
+
+
+class LifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cache_one_shot_task_is_cancelled_on_stop(self) -> None:
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def blocking_fetcher():
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = CacheService(Path(tmp), enable_background=False)
+            cache.register("blocking", blocking_fetcher)
+            await cache.start()
+            await asyncio.wait_for(started.wait(), timeout=1)
+            task = cache._once_task
+            await cache.stop()
+            self.assertIsNotNone(task)
+            assert task is not None
+            self.assertTrue(task.done())
+            self.assertTrue(cancelled.is_set())
+            self.assertIsNone(cache._once_task)
+
+    async def test_service_warmup_task_is_cancelled_on_stop(self) -> None:
+        class FakeCache:
+            request_delay = 0.0
+            update_interval = 60
+
+            def register(self, name, fetcher):
+                return None
+
+            async def start(self):
+                return None
+
+            async def stop(self):
+                return None
+
+            async def get(self, name):
+                return None
+
+            async def refresh_one(self, name, force=False):
+                return True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            translator = TranslationService(api_url="", enabled=False)
+            service = HelldiversService(
+                HD2Client(),
+                FakeCache(),
+                translator,
+                TranslationCache(Path(tmp)),
+                enable_translation=False,
+            )
+            await service.start()
+            task = service._warmup_task
+            await service.stop()
+            self.assertIsNotNone(task)
+            assert task is not None
+            self.assertTrue(task.done())
+            self.assertIsNone(service._warmup_task)
+
+    async def test_translation_session_has_no_hd2_contact_headers(self) -> None:
+        translator = TranslationService(
+            api_url="https://example.com/translate",
+            enabled=False,
+        )
+        session = await translator._ensure_session()
+        try:
+            self.assertNotIn("X-Super-Contact", session.headers)
+            self.assertNotIn("X-Super-Client", session.headers)
+        finally:
+            await translator.close()
 
 
 if __name__ == "__main__":
