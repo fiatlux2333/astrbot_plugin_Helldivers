@@ -105,6 +105,7 @@ class HelldiversService:
         map_renderer: MapRenderer | None = None,
         enable_map: bool = True,
         personal_order_api_url: str = "",
+        allow_private_personal_order_url: bool = False,
         card_renderer: CardRenderer | None = None,
         dashboard_renderer: DashboardRenderer | None = None,
         stats_renderer: StatsRenderer | None = None,
@@ -140,6 +141,9 @@ class HelldiversService:
         self.map_renderer = map_renderer
         self.enable_map = enable_map
         self.personal_order_api_url = personal_order_api_url or ""
+        self.allow_private_personal_order_url = bool(
+            allow_private_personal_order_url
+        )
         self.card_renderer = card_renderer
         self.dashboard_renderer = dashboard_renderer
         self.stats_renderer = stats_renderer
@@ -158,12 +162,13 @@ class HelldiversService:
 
         self._rotation_tasks: list[asyncio.Task] = []
         self._trend_task: asyncio.Task | None = None
+        self._warmup_task: asyncio.Task | None = None
         self._register_fetchers()
 
-    def _render_card(self, card) -> Path | None:
+    async def _render_card(self, card) -> Path | None:
         if self.card_renderer is None or not self.card_renderer.available:
             return None
-        return self.card_renderer.render(card)
+        return await asyncio.to_thread(self.card_renderer.render, card)
 
     def _register_fetchers(self) -> None:
         self.cache.register(self.CACHE_WAR_SUMMARY, self.client.fetch_war_summary)
@@ -181,7 +186,9 @@ class HelldiversService:
     async def start(self) -> None:
         await self.cache.start()
         # 顺序预热缺失缓存（不再并发，避免启动即 429）
-        asyncio.create_task(self._warmup_cache(), name="hd2-cache-warmup")
+        self._warmup_task = asyncio.create_task(
+            self._warmup_cache(), name="hd2-cache-warmup"
+        )
         if self.campaign_trends is not None:
             self._trend_task = asyncio.create_task(
                 self._campaign_trend_loop(), name="hd2-campaign-trends"
@@ -221,10 +228,16 @@ class HelldiversService:
                 await self.cache.refresh_one(name, force=True)
                 await asyncio.sleep(max(self.cache.request_delay, 2.0))
             logger.info("[HD2] cache warmup completed")
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.warning(f"[HD2] cache warmup failed: {e}")
 
     async def stop(self) -> None:
+        if self._warmup_task and not self._warmup_task.done():
+            self._warmup_task.cancel()
+            await asyncio.gather(self._warmup_task, return_exceptions=True)
+        self._warmup_task = None
         if self._trend_task and not self._trend_task.done():
             self._trend_task.cancel()
             await asyncio.gather(self._trend_task, return_exceptions=True)
@@ -323,7 +336,7 @@ class HelldiversService:
             p = await asyncio.to_thread(self.stats_renderer.render, model)
             return [p] if p else []
         card = build_stats_card(summary, war_v1, subtitle=self._subtitle())
-        p = self._render_card(card)
+        p = await self._render_card(card)
         return [p] if p else []
 
     async def get_stats_message(self) -> str:
@@ -402,7 +415,7 @@ class HelldiversService:
                 footer="",
             )
             card.text("等待超级地球最高指挥部的进一步指示")
-            p = self._render_card(card)
+            p = await self._render_card(card)
             return [p] if p else []
         paths: list[Path] = []
         for i, order in enumerate(orders, 1):
@@ -426,7 +439,7 @@ class HelldiversService:
                 brief=fields["brief"],
                 task_desc=fields["task"],
             )
-            p = self._render_card(card)
+            p = await self._render_card(card)
             if p:
                 paths.append(p)
         return paths
@@ -622,7 +635,7 @@ class HelldiversService:
             )
             return "", paths
         card = build_news_card(dispatch, index=index, message_text=text)
-        p = self._render_card(card)
+        p = await self._render_card(card)
         return "", [p] if p else []
 
     # ---- steam ----
@@ -1064,7 +1077,7 @@ class HelldiversService:
             p = await asyncio.to_thread(self.dss_renderer.render, station)
             return [p] if p else []
         card = build_dss_card(station)
-        p = self._render_card(card)
+        p = await self._render_card(card)
         return [p] if p else []
 
     def _attach_trends_to_sections(self, sections: dict[str, Any]) -> None:
@@ -1123,7 +1136,7 @@ class HelldiversService:
             subtitle=self._subtitle(),
             low_impact_threshold=self.dashboard_low_impact_threshold,
         )
-        p = self._render_card(card)
+        p = await self._render_card(card)
         return [p] if p else []
 
     async def get_warfront_message(self, faction: str) -> str:
@@ -1189,7 +1202,7 @@ class HelldiversService:
             return "", [p] if p else []
         campaigns = state.campaigns_for_faction(norm)
         card = build_warfront_card(norm, campaigns)
-        p = self._render_card(card)
+        p = await self._render_card(card)
         return "", [p] if p else []
 
     async def get_planet_message(self, query: str) -> str:
@@ -1226,11 +1239,11 @@ class HelldiversService:
         matches = state.find_planets(query, limit=8)
         if not matches:
             card = build_planet_candidates_card(query, [])
-            p = self._render_card(card)
+            p = await self._render_card(card)
             return "", [p] if p else []
         if len(matches) == 1:
             card = build_planet_card(matches[0])
-            p = self._render_card(card)
+            p = await self._render_card(card)
             return "", [p] if p else []
         ql = query.lower()
         exact = [
@@ -1241,10 +1254,10 @@ class HelldiversService:
         ]
         if len(exact) == 1:
             card = build_planet_card(exact[0])
-            p = self._render_card(card)
+            p = await self._render_card(card)
             return "", [p] if p else []
         card = build_planet_candidates_card(query, matches)
-        p = self._render_card(card)
+        p = await self._render_card(card)
         return "", [p] if p else []
 
     async def _prepare_global_events(
@@ -1305,12 +1318,15 @@ class HelldiversService:
             item["message"] = item.get("display_message") or item.get("message")
             legacy.append(item)
         card = build_global_events_card(legacy)
-        p = self._render_card(card)
+        p = await self._render_card(card)
         return [p] if p else []
 
     async def get_personal_order_message(self) -> str:
         try:
-            data = await self.client.fetch_personal_order(self.personal_order_api_url)
+            data = await self.client.fetch_personal_order(
+                self.personal_order_api_url,
+                allow_private=self.allow_private_personal_order_url,
+            )
             if data and self.enable_translation and isinstance(data, (dict, list)):
                 # 轻量翻译标题字段
                 item = data[0] if isinstance(data, list) and data else data
@@ -1344,7 +1360,10 @@ class HelldiversService:
 
     async def get_personal_order_image(self) -> list[Path]:
         try:
-            data = await self.client.fetch_personal_order(self.personal_order_api_url)
+            data = await self.client.fetch_personal_order(
+                self.personal_order_api_url,
+                allow_private=self.allow_private_personal_order_url,
+            )
             if data and self.enable_translation and isinstance(data, (dict, list)):
                 item = data[0] if isinstance(data, list) and data else data
                 if isinstance(item, dict):
@@ -1371,12 +1390,12 @@ class HelldiversService:
                                     text
                                 )
             card = build_personal_order_card(data)
-            p = self._render_card(card)
+            p = await self._render_card(card)
             return [p] if p else []
         except Exception as e:
             logger.exception(f"[HD2] personal order error: {e}")
             card = build_personal_order_card(None)
-            p = self._render_card(card)
+            p = await self._render_card(card)
             return [p] if p else []
 
     async def get_map_result(self) -> tuple[str, Path | None]:

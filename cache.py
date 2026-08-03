@@ -67,7 +67,9 @@ class CacheService:
         self._entries: dict[str, CacheEntry] = {}
         self._fetchers: dict[str, Fetcher] = {}
         self._lock = asyncio.Lock()
+        self._disk_lock = asyncio.Lock()
         self._task: asyncio.Task | None = None
+        self._once_task: asyncio.Task | None = None
         self._started = False
 
     def register(self, name: str, fetcher: Fetcher) -> None:
@@ -139,7 +141,8 @@ class CacheService:
         entry = CacheEntry(data=data, updated_at=time.time(), name=name)
         async with self._lock:
             self._entries[name] = entry
-            self._save_disk(name, entry)
+        async with self._disk_lock:
+            await asyncio.to_thread(self._save_disk, name, entry)
 
     async def get(self, name: str) -> Any | None:
         async with self._lock:
@@ -205,7 +208,7 @@ class CacheService:
         if self._started:
             return
         self._started = True
-        self.load_disk()
+        await asyncio.to_thread(self.load_disk)
         if self.enable_background:
             self._task = asyncio.create_task(self._loop(), name="hd2-cache-refresh")
             logger.info(
@@ -213,7 +216,9 @@ class CacheService:
             )
         else:
             # 至少尝试一次填充
-            asyncio.create_task(self.refresh_all(), name="hd2-cache-once")
+            self._once_task = asyncio.create_task(
+                self.refresh_all(), name="hd2-cache-once"
+            )
 
     async def stop(self) -> None:
         self._started = False
@@ -226,7 +231,12 @@ class CacheService:
             except Exception as e:
                 logger.warning(f"[HD2] cache task stop error: {e}")
         self._task = None
-        self.save_all()
+        if self._once_task and not self._once_task.done():
+            self._once_task.cancel()
+            await asyncio.gather(self._once_task, return_exceptions=True)
+        self._once_task = None
+        async with self._disk_lock:
+            await asyncio.to_thread(self.save_all)
 
     async def _loop(self) -> None:
         first = True

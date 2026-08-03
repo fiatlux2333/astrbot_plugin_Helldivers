@@ -15,6 +15,8 @@ from urllib.parse import urlsplit
 import aiohttp
 from astrbot.api import logger
 
+from .plugin_info import USER_AGENT
+
 
 class TranslationService:
     """调用外部翻译接口，失败回退原文。"""
@@ -25,7 +27,7 @@ class TranslationService:
         api_url: str,
         timeout: int = 30,
         target_lang: str = "zh",
-        user_agent: str = "astrbot_plugin_Helldivers/1.0",
+        user_agent: str = USER_AGENT,
         proxy_url: str = "",
         enabled: bool = True,
         session: aiohttp.ClientSession | None = None,

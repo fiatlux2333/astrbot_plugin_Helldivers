@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import Any, Final
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
+from .plugin_info import USER_AGENT
+
 try:
     import aiohttp
 except (
@@ -47,7 +49,7 @@ DEFAULT_STEAM_IMAGE_HOSTS: Final[frozenset[str]] = frozenset(
     }
 )
 ALLOWED_IMAGE_MIMES: Final[frozenset[str]] = frozenset(
-    {"image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"}
+    {"image/jpeg", "image/png", "image/webp", "image/gif"}
 )
 _REDIRECT_STATUSES: Final[frozenset[int]] = frozenset({301, 302, 303, 307, 308})
 
@@ -87,9 +89,10 @@ class RemoteImageCache:
         timeout: float = 20.0,
         max_redirects: int = 4,
         max_cache_bytes: int = 150 * 1024 * 1024,
-        user_agent: str = "astrbot_plugin_Helldivers/1.5",
+        user_agent: str = USER_AGENT,
         proxy_url: str | None = None,
         session: Any | None = None,
+        request_headers: dict[str, str] | None = None,
     ) -> None:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -107,8 +110,13 @@ class RemoteImageCache:
         self.timeout_seconds = max(1.0, float(timeout))
         self.max_redirects = max(0, int(max_redirects))
         self.max_cache_bytes = max(1024 * 1024, int(max_cache_bytes))
-        self.user_agent = str(user_agent or "astrbot_plugin_Helldivers/1.5")
+        self.user_agent = str(user_agent or USER_AGENT)
         self.proxy_url = str(proxy_url or "").strip() or None
+        self.request_headers = {
+            str(key): str(value)
+            for key, value in (request_headers or {}).items()
+            if str(key).strip() and str(value).strip()
+        }
         self._session = session
         self._own_session = False
         self._locks: dict[str, asyncio.Lock] = {}
@@ -371,6 +379,7 @@ class RemoteImageCache:
             "Accept": ", ".join(sorted(ALLOWED_IMAGE_MIMES)),
             "User-Agent": self.user_agent,
         }
+        headers.update(self.request_headers)
         if metadata and str(metadata.get("url") or "") == initial_url:
             if metadata.get("etag"):
                 headers["If-None-Match"] = str(metadata["etag"])

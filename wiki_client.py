@@ -15,6 +15,8 @@ from urllib.parse import quote, urlencode
 import aiohttp
 from astrbot.api import logger
 
+from .plugin_info import USER_AGENT
+
 
 def _strip_html_snippet(text: str) -> str:
     if not text:
@@ -100,7 +102,7 @@ class WikiClient:
         *,
         base_url: str = "https://helldivers.wiki.gg",
         api_path: str = "/api.php",
-        user_agent: str = "astrbot_plugin_Helldivers/1.0",
+        user_agent: str = USER_AGENT,
         timeout: int = 30,
         proxy_url: str = "",
         search_limit: int = 5,

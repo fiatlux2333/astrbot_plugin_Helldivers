@@ -723,7 +723,7 @@ def render_warfront(
         ) as handle:
             temporary_name = handle.name
         image.convert("RGB").save(temporary_name, format="PNG", optimize=True)
-        with open(temporary_name, "rb") as handle:
+        with open(temporary_name, "rb+") as handle:
             os.fsync(handle.fileno())
         os.replace(temporary_name, destination)
         temporary_name = None

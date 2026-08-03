@@ -25,7 +25,7 @@
   "api_user_agent": {
     "description": "User-Agent",
     "type": "string",
-    "default": "astrbot_plugin_Helldivers/1.0"
+    "default": "astrbot_plugin_Helldivers/1.8.2"
   },
   "api_timeout": {
     "description": "API 请求超时（秒）",
@@ -37,6 +37,49 @@
     "type": "string",
     "hint": "例如 http://127.0.0.1:7890，留空不使用",
     "default": ""
+  },
+  "enable_bilibili_galaxy_news": {
+    "description": "启用 B站银河快报自动推送",
+    "type": "bool",
+    "hint": "开启后在目标QQ群发送 /银河快报订阅；首次启动只建立动态基线，不补发旧内容",
+    "default": false
+  },
+  "bilibili_uid": {
+    "description": "B站银河快报 UP主 UID",
+    "type": "string",
+    "hint": "默认是截图中“银河快报”账号的空间 UID",
+    "default": "3546777720457465"
+  },
+  "bilibili_keyword": {
+    "description": "B站动态监听关键字",
+    "type": "string",
+    "hint": "动态文字包含此关键字时转发，忽略大小写",
+    "default": "银河快报"
+  },
+  "bilibili_poll_interval": {
+    "description": "B站动态轮询间隔（秒）",
+    "type": "int",
+    "hint": "最小 60 秒，建议 300 秒或更长，降低风控概率",
+    "default": 300
+  },
+  "bilibili_cookie": {
+    "description": "B站 Cookie（后台监听必填）",
+    "type": "text",
+    "hint": "从已登录 B站的浏览器请求中复制完整 Cookie，必须包含 SESSDATA；请勿公开或提交到仓库。修改后需重载插件",
+    "obvious_hint": true,
+    "default": ""
+  },
+  "bilibili_image_max_bytes": {
+    "description": "B站单张图片最大字节数",
+    "type": "int",
+    "hint": "默认 12 MiB",
+    "default": 12582912
+  },
+  "bilibili_image_max_pixels": {
+    "description": "B站单张长图最大解码像素",
+    "type": "int",
+    "hint": "银河快报常用超长图；默认 3200 万像素，仍保留解压炸弹防护",
+    "default": 32000000
   },
   "enable_background_refresh": {
     "description": "启用后台定时同步",
@@ -261,8 +304,14 @@
   "personal_order_api_url": {
     "description": "个人任务 JSON 数据源 URL（可选）",
     "type": "string",
-    "hint": "Personal Order 不在公开社区 API 中；可填 diveharder 或其他代理地址",
+    "hint": "Personal Order 不在公开社区 API 中；默认仅允许公网 HTTPS 地址",
     "default": ""
+  },
+  "allow_private_personal_order_url": {
+    "description": "允许个人指令数据源访问私有网络",
+    "type": "bool",
+    "hint": "仅在使用可信的局域网或本机 JSON 服务时开启；开启后允许 HTTP 和私有 IP",
+    "default": false
   },
   "campaign_history_hours": {
     "description": "战役趋势历史保留小时数",

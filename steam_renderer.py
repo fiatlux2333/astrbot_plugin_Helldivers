@@ -423,7 +423,7 @@ def _write_png_atomic(image: Any, destination: Path) -> Path:
         ) as handle:
             temporary = handle.name
         image.save(temporary, format="PNG", optimize=True)
-        with open(temporary, "rb") as handle:
+        with open(temporary, "rb+") as handle:
             os.fsync(handle.fileno())
         os.replace(temporary, destination)
         temporary = None

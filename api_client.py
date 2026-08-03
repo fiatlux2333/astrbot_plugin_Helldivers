@@ -3,19 +3,25 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import random
 import re
+import socket
 from datetime import datetime, timezone
 from typing import Any, Optional
+from urllib.parse import urljoin, urlsplit
 
 import aiohttp
 from astrbot.api import logger
+
+from .plugin_info import USER_AGENT
 
 
 class HD2Client:
     """统一的 HD2 API 访问层，带有限次重试 + 全局限流。"""
 
     RETRY_STATUSES = {429, 500, 502, 503, 504}
+    REDIRECT_STATUSES = {301, 302, 303, 307, 308}
     COMPANION_NEWS_URL = "https://helldiverscompanion.com/api/steam-api/news"
 
     def __init__(
@@ -25,7 +31,7 @@ class HD2Client:
         war_id: int = 801,
         client_name: str = "astrbot_plugin_Helldivers",
         contact: str = "",
-        user_agent: str = "astrbot_plugin_Helldivers/1.0",
+        user_agent: str = USER_AGENT,
         timeout: int = 30,
         proxy_url: str = "",
         retry_base_delay: float = 5.0,
@@ -48,7 +54,7 @@ class HD2Client:
         self.headers = {
             "X-Super-Client": client_name or "astrbot_plugin_Helldivers",
             "X-Super-Contact": contact or "noreply@example.com",
-            "User-Agent": user_agent or "astrbot_plugin_Helldivers/1.0",
+            "User-Agent": user_agent or USER_AGENT,
             "Accept": "application/json",
         }
         self._session: aiohttp.ClientSession | None = None
@@ -73,6 +79,16 @@ class HD2Client:
         if path.startswith("http://") or path.startswith("https://"):
             return path
         return f"{self.base_url}{path if path.startswith('/') else '/' + path}"
+
+    def _headers_for_url(self, url: str) -> dict[str, str]:
+        target = urlsplit(url)
+        base = urlsplit(self.base_url)
+        if target.hostname and target.hostname.lower() == (base.hostname or "").lower():
+            return dict(self.headers)
+        return {
+            "User-Agent": self.headers["User-Agent"],
+            "Accept": "application/json",
+        }
 
     async def _throttle(self) -> None:
         """全局限流：请求间隔 + 429 冷却。"""
@@ -118,9 +134,10 @@ class HD2Client:
         extra_headers: dict[str, str] | None = None,
         max_attempts: int | None = None,
         failure_is_warning: bool = False,
+        timeout: aiohttp.ClientTimeout | float | None = None,
     ) -> Any:
         url = self._url(path)
-        headers = dict(self.headers)
+        headers = self._headers_for_url(url)
         if extra_headers:
             headers.update(extra_headers)
         attempts = (
@@ -129,19 +146,25 @@ class HD2Client:
             else max(1, int(max_attempts))
         )
         log_failure = logger.warning if failure_is_warning else logger.error
+        request_timeout = (
+            aiohttp.ClientTimeout(total=float(timeout))
+            if isinstance(timeout, (int, float))
+            else timeout
+        )
 
         last_error: Exception | None = None
         for attempt in range(1, attempts + 1):
             try:
                 await self._throttle()
                 session = await self.get_session()
-                async with session.request(
-                    method,
-                    url,
-                    json=json_body,
-                    headers=headers,
-                    proxy=self.proxy_url,
-                ) as resp:
+                request_kwargs: dict[str, Any] = {
+                    "json": json_body,
+                    "headers": headers,
+                    "proxy": self.proxy_url,
+                }
+                if request_timeout is not None:
+                    request_kwargs["timeout"] = request_timeout
+                async with session.request(method, url, **request_kwargs) as resp:
                     if resp.status == 200:
                         return await resp.json(content_type=None)
 
@@ -216,6 +239,135 @@ class HD2Client:
                 f"HD2 API {method} {url} exhausted retries: "
                 f"{self._format_error(last_error)}"
             )
+        return None
+
+    @staticmethod
+    def _external_url_target(
+        url: str,
+        *,
+        allow_private: bool,
+    ) -> tuple[str, int]:
+        parsed = urlsplit(url)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError("external URL must use http or https")
+        if not allow_private and parsed.scheme != "https":
+            raise ValueError("external URL must use https")
+        if parsed.username or parsed.password:
+            raise ValueError("external URL must not contain userinfo")
+        host = (parsed.hostname or "").rstrip(".").lower()
+        if not host:
+            raise ValueError("external URL has no hostname")
+        try:
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        except ValueError as exc:
+            raise ValueError("external URL has an invalid port") from exc
+        if allow_private:
+            return host, port
+        if host == "localhost" or host.endswith(".localhost"):
+            raise ValueError("external URL resolves to localhost")
+        try:
+            address = ipaddress.ip_address(host.split("%", 1)[0])
+        except ValueError:
+            address = None
+        if address is not None and not address.is_global:
+            raise ValueError("external URL uses a non-public IP address")
+        return host, port
+
+    async def _validate_external_url(
+        self,
+        url: str,
+        *,
+        allow_private: bool,
+    ) -> None:
+        host, port = self._external_url_target(url, allow_private=allow_private)
+        if allow_private or self.proxy_url:
+            return
+        try:
+            infos = await asyncio.to_thread(
+                socket.getaddrinfo,
+                host,
+                port,
+                type=socket.SOCK_STREAM,
+            )
+        except OSError as exc:
+            raise ValueError(f"external URL hostname could not be resolved: {host}") from exc
+        if not infos:
+            raise ValueError(f"external URL hostname could not be resolved: {host}")
+        for info in infos:
+            try:
+                address = ipaddress.ip_address(str(info[4][0]).split("%", 1)[0])
+            except (ValueError, IndexError, TypeError) as exc:
+                raise ValueError("external URL DNS result is invalid") from exc
+            if not address.is_global:
+                raise ValueError("external URL DNS resolved to a non-public address")
+
+    @staticmethod
+    def _validate_response_peer(response: aiohttp.ClientResponse) -> None:
+        connection = getattr(response, "connection", None)
+        transport = getattr(connection, "transport", None)
+        if transport is None:
+            return
+        peer = transport.get_extra_info("peername")
+        if not peer:
+            return
+        try:
+            address = ipaddress.ip_address(str(peer[0]).split("%", 1)[0])
+        except (ValueError, IndexError, TypeError) as exc:
+            raise ValueError("external URL peer address is invalid") from exc
+        if not address.is_global:
+            raise ValueError("external URL connected to a non-public address")
+
+    async def request_external_json(
+        self,
+        url: str,
+        *,
+        timeout: float = 10.0,
+        allow_private: bool = False,
+        max_redirects: int = 3,
+    ) -> Any:
+        current = str(url or "").strip()
+        redirect_limit = max(0, int(max_redirects))
+        clean_headers = {
+            "Accept": "application/json",
+            "User-Agent": self.headers["User-Agent"],
+        }
+        client_timeout = aiohttp.ClientTimeout(total=max(1.0, float(timeout)))
+        async with aiohttp.ClientSession(
+            headers=clean_headers,
+            timeout=client_timeout,
+        ) as session:
+            for redirect_count in range(redirect_limit + 1):
+                await self._validate_external_url(
+                    current, allow_private=allow_private
+                )
+                await self._throttle()
+                async with session.get(
+                    current,
+                    proxy=self.proxy_url,
+                    allow_redirects=False,
+                ) as response:
+                    if not self.proxy_url and not allow_private:
+                        self._validate_response_peer(response)
+                    if response.status in self.REDIRECT_STATUSES:
+                        if redirect_count >= redirect_limit:
+                            raise ValueError("external URL redirected too many times")
+                        location = str(
+                            response.headers.get("Location") or ""
+                        ).strip()
+                        if not location:
+                            raise ValueError(
+                                "external URL redirect has no Location header"
+                            )
+                        current = urljoin(current, location)
+                        continue
+                    if response.status != 200:
+                        logger.warning(
+                            "HD2 external JSON request failed status=%s url=%s",
+                            response.status,
+                            current,
+                        )
+                        return None
+                    return await response.json(content_type=None)
         return None
 
     async def get_json(self, path: str) -> Any:
@@ -452,7 +604,10 @@ class HD2Client:
         return await self.fetch_war_status_events()
 
     async def fetch_personal_order(
-        self, api_url: str | None = None
+        self,
+        api_url: str | None = None,
+        *,
+        allow_private: bool = False,
     ) -> Optional[dict[str, Any] | list[Any]]:
         """个人任务：仅使用用户配置的 URL（公开社区 API 通常不提供 PO）。
 
@@ -464,19 +619,13 @@ class HD2Client:
         url = (api_url or "").strip()
         if not url:
             return None
-        # 可选源：失败快速返回，不占用默认 3 次长退避
-        old_attempts = self.retry_max_attempts
-        old_timeout = self.timeout
         try:
-            self.retry_max_attempts = 1
-            self.timeout = aiohttp.ClientTimeout(
-                total=min(10, int(old_timeout.total or 10))
+            data = await self.request_external_json(
+                url,
+                timeout=10.0,
+                allow_private=allow_private,
             )
-            data = await self.get_json(url)
-            # 空列表也算“有响应”：表示当前无个人任务
-            if data is not None:
-                return data
+        except (OSError, ValueError, aiohttp.ClientError) as exc:
+            logger.warning("[HD2] personal order URL rejected or unavailable: %s", exc)
             return None
-        finally:
-            self.retry_max_attempts = old_attempts
-            self.timeout = old_timeout
+        return data if isinstance(data, (dict, list)) else None
