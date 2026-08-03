@@ -206,6 +206,8 @@ Illuminate / 光能者
 <img width="666" height="888" alt="银河战争统计" src="https://github.com/user-attachments/assets/38894c8a-2349-4265-943c-63a6e9de6508" />
 <img width="666" height="888" alt="重要指令" src="https://github.com/user-attachments/assets/f7066508-100d-40dc-ab67-dceb1b3a6983" />
 <img width="888" height="888" alt="民主空间站" src="https://github.com/user-attachments/assets/686e8abd-0a88-4f91-8031-5975953effff" />
+<img width="2242" height="771" alt="image" src="https://github.com/user-attachments/assets/02bdc815-a76e-48ef-9a4f-35fa9a988e11" />
+
 
 ## 📋 依赖
 
