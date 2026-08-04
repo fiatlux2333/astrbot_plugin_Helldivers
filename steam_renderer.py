@@ -32,6 +32,14 @@ try:
 except ImportError:  # pragma: no cover - supports direct module loading in smoke tests
     from steam_parser import ParsedSteamContent, SteamBlock, parse_steam_content
 
+try:
+    from .visual_assets import font as _shared_font
+except Exception:  # pragma: no cover - direct module execution
+    try:
+        from visual_assets import font as _shared_font  # type: ignore[no-redef]
+    except Exception:
+        _shared_font = None  # type: ignore[assignment]
+
 WIDTH = 1060
 MAX_HEIGHT = 1600
 MIN_HEIGHT = 900
@@ -51,6 +59,7 @@ STEAM_DARK_BLUE = (22, 71, 105)
 DIVIDER = (55, 69, 83)
 BULLET = (111, 191, 238)
 _FONT_CACHE: dict[tuple[int, bool], Any] = {}
+_BUNDLED_FONT_PATH = Path(__file__).resolve().parent / "assets" / "fonts" / "NotoSansSC-Variable.ttf"
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,8 +78,17 @@ def _font(size: int, *, bold: bool = False):
     key = (max(1, int(size)), bool(bold))
     if key in _FONT_CACHE:
         return _FONT_CACHE[key]
+    if _shared_font is not None:
+        try:
+            selected = _shared_font(key[0], bold=bold)
+        except (OSError, TypeError, ValueError):
+            selected = None
+        if selected is not None:
+            _FONT_CACHE[key] = selected
+            return selected
     weight = "Bold" if bold else "Regular"
     candidates = (
+        str(_BUNDLED_FONT_PATH),
         f"/usr/share/fonts/opentype/noto/NotoSansCJK-{weight}.ttc",
         f"/usr/share/fonts/truetype/noto-cjk/NotoSansCJK-{weight}.ttc",
         "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",

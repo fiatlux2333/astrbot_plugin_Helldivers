@@ -77,7 +77,7 @@ pip install -r requirements.txt
 
 ### Linux 中文字体
 
-图片渲染需要可用的中文字体。Linux 环境推荐安装 Noto CJK：
+插件已内置 `assets/fonts/NotoSansSC-Variable.ttf`，图片渲染会优先使用这份字体；Debian、Docker 和 Hyper-V 环境无需额外安装中文字体。若你裁剪了该字体文件，或希望使用系统字体，可按发行版安装 Noto CJK：
 
 ```bash
 # Debian / Ubuntu
@@ -90,7 +90,7 @@ yum install -y google-noto-cjk-fonts
 apk add font-noto-cjk
 ```
 
-Windows 和 macOS 通常可直接使用系统中文字体。
+Windows 和 macOS 通常可直接使用系统中文字体。字体授权文本见 `assets/fonts/OFL.txt`。
 
 ## ⚙️ 配置
 
@@ -231,7 +231,7 @@ Illuminate / 光能者
 2. 出现 `429` 时增大 `cache_update_interval` 与 `min_request_interval`。
 3. Steam 官方接口不可访问时，插件会尝试社区备用数据源；国内网络可配置 `proxy_url`。
 4. 公开社区 API 通常不提供个人指令，需要配置 `personal_order_api_url`；默认仅允许公网 HTTPS 地址。
-5. Pillow 或中文字体缺失时，图片可能无法生成或出现方框字。
+5. 若删除内置字体且系统也没有可用中文字体，图片可能出现方框字。
 6. AstrBot 热重载残留旧 handler 时可能重复回复，完整重启 AstrBot 可清理旧实例。
 7. 银河快报转载会保留原动态出处，请遵守原作者的转载要求。
 

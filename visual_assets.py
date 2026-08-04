@@ -24,6 +24,7 @@ Font: TypeAlias = ImageFont.FreeTypeFont | ImageFont.ImageFont
 FitMode: TypeAlias = Literal["contain", "cover"]
 
 ASSET_ROOT = Path(__file__).resolve().parent / "assets"
+_BUNDLED_FONT_PATH = ASSET_ROOT / "fonts" / "NotoSansSC-Variable.ttf"
 _MANIFEST_PATH: Path | None = None
 _FONT_TOKEN_RE = re.compile(r"\s+|[A-Za-z0-9][A-Za-z0-9_./:%+\-]*|.", re.DOTALL)
 
@@ -61,6 +62,7 @@ def configure_asset_manifest(path: str | Path | None) -> None:
     _asset_resolver.cache_clear()
 
 _CJK_FONT_CANDIDATES = (
+    str(_BUNDLED_FONT_PATH),
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/truetype/noto-cjk/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
@@ -69,6 +71,7 @@ _CJK_FONT_CANDIDATES = (
     "C:/Windows/Fonts/simhei.ttf",
 )
 _CJK_BOLD_FONT_CANDIDATES = (
+    str(_BUNDLED_FONT_PATH),
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
     "/usr/share/fonts/truetype/noto-cjk/NotoSansCJK-Bold.ttc",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -427,10 +430,32 @@ def _load_font_cached(
         try:
             path = Path(candidate)
             if path.exists():
-                return ImageFont.truetype(path, size=size)
+                selected = ImageFont.truetype(path, size=size)
+                if path.resolve() == _BUNDLED_FONT_PATH.resolve():
+                    _set_bundled_font_weight(selected, bold=bold)
+                return selected
         except OSError:
             continue
     return ImageFont.load_default(size=size)
+
+
+def _set_bundled_font_weight(font: Font, *, bold: bool) -> None:
+    """Select a readable weight when Pillow loads the bundled variable font."""
+    get_axes = getattr(font, "get_variation_axes", None)
+    set_axes = getattr(font, "set_variation_by_axes", None)
+    if not callable(get_axes) or not callable(set_axes):
+        return
+    try:
+        axes = get_axes()
+        if not axes:
+            return
+        values = [axis["default"] for axis in axes]
+        axis = axes[0]
+        target = 700 if bold else 400
+        values[0] = max(axis["minimum"], min(axis["maximum"], target))
+        set_axes(values)
+    except (AttributeError, KeyError, OSError, TypeError, ValueError):
+        return
 
 
 def get_font(

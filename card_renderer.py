@@ -22,10 +22,11 @@ except Exception:  # pragma: no cover
     ImageFont = None  # type: ignore
 
 try:
-    from .visual_assets import asset_image, fit_image
+    from .visual_assets import asset_image, fit_image, font as _shared_font
 except Exception:  # pragma: no cover
     asset_image = None  # type: ignore
     fit_image = None  # type: ignore
+    _shared_font = None  # type: ignore
 
 
 # ---- 主题 ----
@@ -52,6 +53,7 @@ COLOR_MO = (255, 220, 0)
 COLOR_DSS = (214, 232, 248)
 
 _FONT_CACHE: dict[int, Any] = {}
+_BUNDLED_FONT_PATH = Path(__file__).resolve().parent / "assets" / "fonts" / "NotoSansSC-Variable.ttf"
 
 
 def _font(size: int):
@@ -59,7 +61,16 @@ def _font(size: int):
         return None
     if size in _FONT_CACHE:
         return _FONT_CACHE[size]
+    if _shared_font is not None:
+        try:
+            fnt = _shared_font(size)
+        except (OSError, TypeError, ValueError):
+            fnt = None
+        if fnt is not None:
+            _FONT_CACHE[size] = fnt
+            return fnt
     candidates = [
+        str(_BUNDLED_FONT_PATH),
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/truetype/noto-cjk/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
