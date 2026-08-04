@@ -88,7 +88,6 @@ _RESOURCE_NAMES: dict[str, str] = {
 }
 
 _FONT_REGULAR = (
-    str(Path(__file__).resolve().parent / "assets" / "fonts" / "NotoSansSC-Variable.ttf"),
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/truetype/noto-cjk/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -96,7 +95,6 @@ _FONT_REGULAR = (
     "C:/Windows/Fonts/arial.ttf",
 )
 _FONT_BOLD = (
-    str(Path(__file__).resolve().parent / "assets" / "fonts" / "NotoSansSC-Variable.ttf"),
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
     "/usr/share/fonts/truetype/noto-cjk/NotoSansCJK-Bold.ttc",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",

@@ -56,14 +56,6 @@ except ImportError:  # pragma: no cover - availability is exposed to callers
     ImageDraw = None  # type: ignore[assignment]
     ImageFont = None  # type: ignore[assignment]
 
-try:
-    from .visual_assets import font as _shared_font
-except Exception:  # pragma: no cover - direct module execution
-    try:
-        from visual_assets import font as _shared_font  # type: ignore[no-redef]
-    except Exception:
-        _shared_font = None  # type: ignore[assignment]
-
 WIDTH = 1180
 MARGIN_X = 30
 TITLE_H = 100
@@ -103,7 +95,6 @@ _COLUMNS: tuple[tuple[str, int, str], ...] = (
     ("预计结果", 318, "right"),
 )
 _FONT_CACHE: dict[tuple[int, bool], Any] = {}
-_BUNDLED_FONT_PATH = Path(__file__).resolve().parent / "assets" / "fonts" / "NotoSansSC-Variable.ttf"
 
 
 def _finite_float(value: Any, default: float = 0.0) -> float:
@@ -218,17 +209,8 @@ def _font(size: int, *, bold: bool = False):
     key = (size, bold)
     if key in _FONT_CACHE:
         return _FONT_CACHE[key]
-    if _shared_font is not None:
-        try:
-            selected = _shared_font(size, bold=bold)
-        except (OSError, TypeError, ValueError):
-            selected = None
-        if selected is not None:
-            _FONT_CACHE[key] = selected
-            return selected
     weight = "Bold" if bold else "Regular"
     candidates = [
-        str(_BUNDLED_FONT_PATH),
         f"/usr/share/fonts/opentype/noto/NotoSansCJK-{weight}.ttc",
         f"/usr/share/fonts/truetype/noto-cjk/NotoSansCJK-{weight}.ttc",
         "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",

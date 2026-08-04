@@ -13,7 +13,6 @@ Unless noted below, SVG and PNG files in this directory are original fan-art-lik
 - `user/dss.png` is the user-provided DSS reference image used by the DSS report renderer.
 - `user/super_earth_flag.png` is the user-provided Super Earth flag reference used for major-order and global-event artwork.
 - `user/*_template.png` files are user-provided visual references used as darkened cockpit backplates beneath dynamic report data.
-- `fonts/NotoSansSC-Variable.ttf` is the bundled Noto Sans SC font used for reliable CJK rendering. It is distributed under the SIL Open Font License 1.1; the complete license text is in `fonts/OFL.txt`.
 
 ## License
 
@@ -40,4 +39,3 @@ Helldivers and related names and fictional concepts are trademarks or intellectu
 - `tactical/heavy_ordnance.svg` and `.png`
 - `tactical/orbital_napalm.svg` and `.png`
 - `global_events/super_earth_flag.svg` and `.png`
-- `fonts/NotoSansSC-Variable.ttf` and `OFL.txt`

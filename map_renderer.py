@@ -23,12 +23,7 @@ from typing import Any, Iterable
 try:
     from .i18n import format_faction, format_planet, format_status, t
     from .hud_theme import cockpit_backdrop, draw_chamfered_panel, draw_scanlines
-    from .visual_assets import (
-        asset_image,
-        asset_sha256,
-        font as _shared_font,
-        paste_contain,
-    )
+    from .visual_assets import asset_image, asset_sha256, paste_contain
 except Exception:  # pragma: no cover
     format_faction = lambda value, default=None: default or str(value)  # type: ignore
     format_planet = lambda value, default=None: default or str(value)  # type: ignore
@@ -36,7 +31,6 @@ except Exception:  # pragma: no cover
     t = lambda key, default=None: default or str(key)  # type: ignore
     asset_image = None  # type: ignore
     asset_sha256 = lambda value: ""  # type: ignore
-    _shared_font = None  # type: ignore
     paste_contain = None  # type: ignore
 
 try:
@@ -88,23 +82,14 @@ _BG_INNER = (19, 31, 60)
 _BG_OUTER = (3, 5, 13)
 _RENDERER_VERSION = "map-renderer-v5"
 _TAU = math.tau
-_BUNDLED_FONT_PATH = Path(__file__).resolve().parent / "assets" / "fonts" / "NotoSansSC-Variable.ttf"
 
 
 @lru_cache(maxsize=32)
 def _find_font(size: int, bold: bool = False):
     if ImageFont is None:
         return None
-    if _shared_font is not None:
-        try:
-            selected = _shared_font(size, bold=bold)
-        except (OSError, TypeError, ValueError):
-            selected = None
-        if selected is not None:
-            return selected
     if bold:
         candidates = [
-            str(_BUNDLED_FONT_PATH),
             "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
             "/usr/share/fonts/truetype/noto-cjk/NotoSansCJK-Bold.ttc",
             "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
@@ -114,7 +99,6 @@ def _find_font(size: int, bold: bool = False):
         ]
     else:
         candidates = [
-            str(_BUNDLED_FONT_PATH),
             "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/truetype/noto-cjk/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",

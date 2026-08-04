@@ -26,14 +26,6 @@ except ImportError:  # pragma: no cover
     ImageFont = None  # type: ignore[assignment]
     ImageOps = None  # type: ignore[assignment]
 
-try:
-    from .visual_assets import font as _shared_font
-except Exception:  # pragma: no cover - direct module execution
-    try:
-        from visual_assets import font as _shared_font  # type: ignore[no-redef]
-    except Exception:
-        _shared_font = None  # type: ignore[assignment]
-
 EventTreatment = Literal["SUCCESS", "FAILURE", "BRIEFING"]
 WIDTH = 1040
 HERO_HEIGHT = 390
@@ -53,7 +45,6 @@ TREATMENTS: dict[EventTreatment, tuple[int, int, int]] = {
     "BRIEFING": (98, 174, 232),
 }
 _FONT_CACHE: dict[tuple[int, bool], Any] = {}
-_BUNDLED_FONT_PATH = Path(__file__).resolve().parent / "assets" / "fonts" / "NotoSansSC-Variable.ttf"
 
 _SUCCESS_WORDS = (
     "success",
@@ -88,17 +79,8 @@ def _font(size: int, *, bold: bool = False):
     key = (max(1, int(size)), bool(bold))
     if key in _FONT_CACHE:
         return _FONT_CACHE[key]
-    if _shared_font is not None:
-        try:
-            selected = _shared_font(key[0], bold=bold)
-        except (OSError, TypeError, ValueError):
-            selected = None
-        if selected is not None:
-            _FONT_CACHE[key] = selected
-            return selected
     weight = "Bold" if bold else "Regular"
     candidates = (
-        str(_BUNDLED_FONT_PATH),
         f"/usr/share/fonts/opentype/noto/NotoSansCJK-{weight}.ttc",
         f"/usr/share/fonts/truetype/noto-cjk/NotoSansCJK-{weight}.ttc",
         "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",

@@ -37,14 +37,6 @@ except ImportError:  # Support direct module loading during integration/smoke te
     from i18n import format_planet
     from stats_model import build_stats_view_model
 
-try:
-    from .visual_assets import font as _shared_font
-except Exception:  # pragma: no cover - direct module execution
-    try:
-        from visual_assets import font as _shared_font  # type: ignore[no-redef]
-    except Exception:
-        _shared_font = None  # type: ignore[assignment]
-
 WIDTH = 960
 HEIGHT = 1320
 MARGIN = 46
@@ -79,7 +71,6 @@ PIE_COLORS = (
 
 _FONT_CACHE: dict[tuple[int, bool], Any] = {}
 _VISUAL_ASSETS: Any | None | bool = False
-_BUNDLED_FONT_PATH = Path(__file__).resolve().parent / "assets" / "fonts" / "NotoSansSC-Variable.ttf"
 
 
 def _font(size: int, *, bold: bool = False):
@@ -89,16 +80,7 @@ def _font(size: int, *, bold: bool = False):
     cached = _FONT_CACHE.get(key)
     if cached is not None:
         return cached
-    if _shared_font is not None:
-        try:
-            result = _shared_font(size, bold=bold)
-        except (OSError, TypeError, ValueError):
-            result = None
-        if result is not None:
-            _FONT_CACHE[key] = result
-            return result
     candidates = [
-        str(_BUNDLED_FONT_PATH),
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
         if bold
         else "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
