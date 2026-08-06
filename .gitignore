@@ -11,6 +11,10 @@ venv/
 *.egg-info/
 dist/
 build/
+.cache/
+.workbuddy/
+ppt_intro/.cache/
+ppt_intro/.slidep/
 .DS_Store
 data/
 *.log

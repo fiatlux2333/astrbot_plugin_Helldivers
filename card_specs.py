@@ -229,8 +229,8 @@ def build_personal_order_card(data: dict[str, Any] | list[Any] | None) -> Card:
     if data is None:
         card.text("暂时无法获取个人任务（Personal Order）。", muted=True)
         card.text(
-            "公开社区 API 不提供该数据。可在插件配置 personal_order_api_url "
-            "填写可用的 JSON 源后重试。",
+            "默认 Companion 社区数据源当前不可用或快照已过期。"
+            "插件不会把旧任务显示为当前任务。",
             muted=True,
         )
         return card
@@ -547,13 +547,18 @@ def build_global_events_card(events: list[dict[str, Any]]) -> Card:
 
 
 def build_news_card(
-    dispatch: dict[str, Any], *, index: int = 1, message_text: str | None = None
+    dispatch: dict[str, Any],
+    *,
+    index: int = 1,
+    message_text: str | None = None,
+    card_title: str | None = None,
+    footer: str | None = None,
 ) -> Card:
     card = Card(
-        title=f"游戏快讯 {index}",
+        title=card_title or f"游戏快讯 {index}",
         accent=FACTION_COLORS["Humans"],
         emblem="super_earth",
-        footer="使用 /news [1-5] 查看其他快讯 · api.helldivers2.dev",
+        footer=footer or "使用 /news [1-5] 查看其他快讯 · api.helldivers2.dev",
     )
     dtype = dispatch_type_name(dispatch.get("type", 0))
     published = format_iso_time(dispatch.get("published", ""))

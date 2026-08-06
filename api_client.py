@@ -23,6 +23,13 @@ class HD2Client:
     RETRY_STATUSES = {429, 500, 502, 503, 504}
     REDIRECT_STATUSES = {301, 302, 303, 307, 308}
     COMPANION_NEWS_URL = "https://helldiverscompanion.com/api/steam-api/news"
+    COMPANION_WAR_DATA_URL = (
+        "https://helldiverscompanion.com/api/hell-divers-2-api/get-api-data-live"
+    )
+    COMPANION_PERSONAL_ORDER_URL = (
+        "https://cdn.helldiverscompanion.com/live/personalOrders/current.json"
+    )
+    PERSONAL_ORDER_MAX_AGE_SECONDS = 3 * 24 * 60 * 60
 
     def __init__(
         self,
@@ -557,6 +564,54 @@ class HD2Client:
             )
         return sorted(records, key=lambda item: item.get("published", ""), reverse=True)
 
+    async def fetch_companion_gww_news(self, news_id: int) -> dict[str, Any] | None:
+        """Fetch one Galactic Wide Web article by its Companion route ID."""
+
+        article_id = int(news_id)
+        data = await self.request_json(
+            "GET",
+            self.COMPANION_WAR_DATA_URL,
+            extra_headers={"Accept-Language": "en-US"},
+            max_attempts=2,
+            failure_is_warning=True,
+        )
+        if not isinstance(data, dict):
+            return None
+        items = data.get("news")
+        if not isinstance(items, list):
+            return None
+        article = None
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            try:
+                matches = int(item.get("id")) == article_id
+            except (TypeError, ValueError):
+                matches = False
+            if matches:
+                article = item
+                break
+        if article is None:
+            return None
+
+        published_iso = ""
+        try:
+            client_time = float(data.get("clientTime")) / 1000
+            time_since_start = float(data.get("timeSinceStart"))
+            published = float(article.get("published"))
+            timestamp = client_time - time_since_start + published
+            published_iso = datetime.fromtimestamp(
+                timestamp, timezone.utc
+            ).isoformat().replace("+00:00", "Z")
+        except (TypeError, ValueError, OSError, OverflowError):
+            pass
+
+        result = dict(article)
+        result["id"] = article_id
+        result["published"] = published_iso
+        result["source"] = "helldiverscompanion"
+        return result
+
     @staticmethod
     def _companion_image_url(contents: str) -> str | None:
         """Extract the first Steam CDN image without accepting arbitrary hosts."""
@@ -609,16 +664,17 @@ class HD2Client:
         *,
         allow_private: bool = False,
     ) -> Optional[dict[str, Any] | list[Any]]:
-        """个人任务：仅使用用户配置的 URL（公开社区 API 通常不提供 PO）。
+        """Fetch Personal Orders from a configured source or Companion CDN.
 
-        说明：
-        - diveharder 等第三方代理经常 DNS/服务不可用，默认不再硬编码探测，
-          避免每次 /personal_order 卡 10+ 秒重试。
-        - 需要时在配置 personal_order_api_url 填入可用 JSON 源。
+        Arrowhead does not expose a documented public Personal Order API. The
+        built-in community source is rejected when its snapshot is older than
+        three days so expired orders are never presented as current.
         """
-        url = (api_url or "").strip()
-        if not url:
-            return None
+        configured_url = (api_url or "").strip()
+        url = configured_url or self.COMPANION_PERSONAL_ORDER_URL
+        is_builtin_source = (
+            url.rstrip("/") == self.COMPANION_PERSONAL_ORDER_URL.rstrip("/")
+        )
         try:
             data = await self.request_external_json(
                 url,
@@ -628,4 +684,48 @@ class HD2Client:
         except (OSError, ValueError, aiohttp.ClientError) as exc:
             logger.warning("[HD2] personal order URL rejected or unavailable: %s", exc)
             return None
-        return data if isinstance(data, (dict, list)) else None
+        if not isinstance(data, (dict, list)):
+            return None
+
+        if is_builtin_source:
+            if not isinstance(data, dict):
+                return None
+            timestamp = str(data.get("timestampUtc") or "").strip()
+            try:
+                source_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                if source_time.tzinfo is None:
+                    source_time = source_time.replace(tzinfo=timezone.utc)
+                source_age = (datetime.now(timezone.utc) - source_time).total_seconds()
+            except (TypeError, ValueError):
+                logger.warning("[HD2] Companion personal order timestamp is invalid")
+                return None
+            if source_age < 0 or source_age > self.PERSONAL_ORDER_MAX_AGE_SECONDS:
+                logger.warning(
+                    "[HD2] Companion personal order snapshot is stale: %s",
+                    timestamp,
+                )
+                return None
+
+            payload = data.get("data")
+            if not isinstance(payload, list):
+                return None
+            active: list[dict[str, Any]] = []
+            elapsed_seconds = max(0, int(source_age))
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                setting = item.get("setting")
+                order_type = setting.get("type") if isinstance(setting, dict) else None
+                try:
+                    expires_in = int(item.get("expiresIn") or 0)
+                    type_id = int(order_type)
+                except (TypeError, ValueError):
+                    continue
+                remaining = expires_in - elapsed_seconds
+                if type_id == 2 and remaining > 0:
+                    active_item = dict(item)
+                    active_item["expiresIn"] = remaining
+                    active.append(active_item)
+            return active
+
+        return data

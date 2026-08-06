@@ -2,5 +2,5 @@
 
 PLUGIN_NAME = "astrbot_plugin_Helldivers"
 PLUGIN_AUTHOR = "牡蛎"
-PLUGIN_VERSION = "v1.8.2"
+PLUGIN_VERSION = "v1.8.5"
 USER_AGENT = f"{PLUGIN_NAME}/{PLUGIN_VERSION.lstrip('v')}"

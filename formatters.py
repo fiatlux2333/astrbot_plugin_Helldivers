@@ -417,11 +417,15 @@ def format_dss_message(station: dict[str, Any] | None) -> str:
     if not station:
         return "❌ 暂时无法获取民主空间站（DSS）信息。"
     try:
+        from .war_state import faction_cn
+
         planet = (
             station.get("planet") if isinstance(station.get("planet"), dict) else {}
         )
         p_name = planet.get("name") or station.get("planetName") or "未知"
-        owner = planet.get("currentOwner") or planet.get("owner") or "未知"
+        owner = faction_cn(
+            planet.get("currentOwner") or planet.get("owner") or "未知"
+        )
         election = station.get("electionEnd") or station.get("nextElectionEnd") or ""
         election_str = format_iso_time(str(election)) if election else "未知"
         flags = station.get("flags", "")
@@ -436,29 +440,7 @@ def format_dss_message(station: dict[str, Any] | None) -> str:
             f"▎选举/跃迁截止: {election_str}",
         ]
         if flags != "":
-            lines.append(f"▎Flags: {flags}")
-
-        actions = (
-            station.get("tacticalActions")
-            or station.get("tactical_actions")
-            or station.get("actions")
-            or []
-        )
-        if isinstance(actions, list) and actions:
-            lines.append("-------------")
-            lines.append("▎战术行动:")
-            for a in actions[:6]:
-                if not isinstance(a, dict):
-                    continue
-                name = a.get("name") or a.get("title") or "行动"
-                status = a.get("status")
-                desc = clean_game_text(str(a.get("description") or a.get("desc") or ""))
-                status_s = f" [{status}]" if status is not None else ""
-                lines.append(f"  • {name}{status_s}")
-                if desc:
-                    if len(desc) > 120:
-                        desc = desc[:117] + "..."
-                    lines.append(f"    {desc}")
+            lines.append(f"▎标志: {flags}")
 
         lines.append("-------------")
         lines.append("为了超级地球！🌍")
@@ -644,8 +626,8 @@ def format_personal_order_message(data: dict[str, Any] | list[Any] | None) -> st
     if data is None:
         return (
             "❌ 暂时无法获取个人任务（Personal Order）。\n"
-            "公开社区 API 不提供该数据，且默认第三方源（diveharder）当前不可用。\n"
-            "若你有可用的 PO JSON 接口，请在插件配置 personal_order_api_url 填写后重试。"
+            "默认 Companion 社区数据源当前不可用或快照已过期；"
+            "插件不会把旧任务显示为当前任务。"
         )
     try:
         item: dict[str, Any]

@@ -15,6 +15,7 @@ from .api_client import HD2Client
 from .awaiting_orders_renderer import AwaitingOrdersRenderer
 from .cache import CacheService
 from .campaign_trends import CampaignTrendStore
+from .companion_screenshot import CompanionTranslationResult
 from .dashboard_renderer import DashboardRenderer
 from .dss_renderer import DSSRenderer
 from .dispatch_renderer import DispatchRenderer
@@ -58,9 +59,39 @@ from .steam_parser import ParsedSteamContent, SteamBlock, parse_steam_content
 from .text_utils import clean_game_text
 from .steam_renderer import SteamRenderer
 from .translator import TranslationCache, TranslationService
-from .war_state import WarState, normalize_faction
+from .war_state import WarState, normalize_faction, planet_index, planet_name
 from .warfront_renderer import WarfrontRenderer
 from .wiki_client import WikiClient
+
+
+_COMPANION_STATIC_TRANSLATIONS = {
+    "review message from super earth": "查阅来自超级地球的消息",
+    "provided by the ministry of truth, and our patriotic sponsors": "由真理部及爱国赞助商提供",
+    "close": "关闭",
+    "major order": "最高指令",
+    "next ftl jump:": "下次超光速跃迁：",
+    "orbital blockade": "轨道封锁",
+    "eagle storm": "飞鹰风暴",
+    "heavy ordnance distribution": "重型军械分发",
+    "estimated ready time:": "预计准备时间：",
+    "available in:": "可用倒计时：",
+    "defense campaigns cannot originate from this planet. the hellpod space optimization booster is automatically active for all missions.": "该星球不会触发防御战役；所有任务都会自动启用“地狱舱空间优化”强化。",
+    "deploys periodic eagle airstrikes during missions. slows enemy progress in defense campaigns.": "任务期间将定期发动飞鹰空袭，并延缓敌军在防御战役中的推进。",
+    "gives access to the orbital 380mm he barrage stratagem during missions. accelerates progress in liberation campaigns.": "任务期间可调用“轨道 380 毫米高爆弹幕”战略配备，同时加快解放战役进度。",
+    "meissa": "梅莎",
+    "ymir sector": "尤弥尔星区",
+    "planet statistics": "星球统计",
+    "helldivers active": "在线绝地潜兵",
+    "missions completed": "已完成任务",
+    "missions failed": "失败任务",
+    "mission dive time": "任务投入时间",
+    "shots fired": "射击次数",
+    "projectile hits": "命中次数",
+    "hits to shot ratio": "命中射击比",
+    "kill count": "击杀数",
+    "death count": "阵亡数",
+    "sector": "扇区",
+}
 
 
 class HelldiversService:
@@ -638,6 +669,35 @@ class HelldiversService:
         p = await self._render_card(card)
         return "", [p] if p else []
 
+    async def get_companion_news_image(
+        self, news_id: str
+    ) -> tuple[str, list[Path]]:
+        try:
+            article_id = int(str(news_id).strip())
+        except (TypeError, ValueError):
+            return "❌ Companion 新闻编号无效。", []
+        article = await self.client.fetch_companion_gww_news(article_id)
+        if article is None:
+            return f"❌ 未找到 Companion 新闻 #{article_id}。", []
+
+        dispatch = self._normalize_dispatch(article)
+        text = await self._translate_dispatch(dispatch)
+        title = str(dispatch.get("title") or "")
+        if self.enable_translation and title:
+            dispatch["title"] = await self._translate_cached_text(
+                "companion_news_title", str(article_id), title
+            )
+        card = build_news_card(
+            dispatch,
+            message_text=text,
+            card_title=f"Strohmann News #{article_id}",
+            footer="Helldivers Companion · 本地数据渲染",
+        )
+        path = await self._render_card(card)
+        if path is None:
+            return "❌ Companion 新闻图片生成失败，请检查 Pillow 和字体。", []
+        return "", [path]
+
     # ---- steam ----
 
     async def ensure_steam_translated(self) -> None:
@@ -982,6 +1042,61 @@ class HelldiversService:
         await self.translation_cache.store(namespace, cache_id, text, final)
         return final
 
+    async def translate_companion_fragments(
+        self,
+        target: Any,
+        texts: list[str],
+    ) -> CompanionTranslationResult:
+        """Translate visible Companion DOM fragments before Playwright capture."""
+        unique = list(dict.fromkeys(text for text in texts if text.strip()))[:96]
+        kind = str(getattr(target, "kind", "page"))
+        translations: dict[str, str] = {}
+        pending: list[tuple[str, str]] = []
+        for source in unique:
+            normalized = " ".join(source.split()).casefold()
+            static = _COMPANION_STATIC_TRANSLATIONS.get(normalized)
+            if static:
+                translations[source] = static
+                continue
+            official_planet = lookup_planet_name(source)
+            if official_planet:
+                translations[source] = official_planet
+                continue
+            digest = hashlib.sha1(source.encode("utf-8")).hexdigest()[:12]
+            cache_id = f"{kind}:{normalized[:80]}:{digest}"
+            cached = await self.translation_cache.get(
+                "companion_page_v3", cache_id
+            )
+            if cached and cached.get("original_text") == source:
+                translated = str(cached.get("translated_text") or source)
+                if translated != source:
+                    translations[source] = translated
+                continue
+            pending.append((source, cache_id))
+
+        provider_translation_succeeded = False
+        if pending:
+            translated_values = await self.translator.translate_texts(
+                [source for source, _ in pending]
+            )
+            for (source, cache_id), translated in zip(
+                pending, translated_values, strict=False
+            ):
+                final = translated if translated and translated != source else source
+                if final != source:
+                    provider_translation_succeeded = True
+                    await self.translation_cache.store(
+                        "companion_page_v3",
+                        cache_id,
+                        source,
+                        final,
+                    )
+                    translations[source] = final
+        return CompanionTranslationResult(
+            translations=translations,
+            cacheable=not pending or provider_translation_succeeded,
+        )
+
     async def _localize_planet_name(
         self, value: Any, *, include_english: bool = True
     ) -> str:
@@ -1024,13 +1139,24 @@ class HelldiversService:
                         )
                     container[key] = localized[token]
 
-    async def _prepare_dss_station(self, station: dict[str, Any] | None):
+    async def _prepare_dss_station(
+        self,
+        station: dict[str, Any] | None,
+        *,
+        include_actions: bool = True,
+    ):
         if not station:
             return None
         view = copy.deepcopy(station)
-        await self._localize_planet_rows([view])
+        await self._localize_planet_rows([view], include_english=False)
+        planet = view.get("planet") if isinstance(view.get("planet"), dict) else {}
+        sector = planet.get("sector")
+        if isinstance(sector, str) and len(sector.strip()) >= 3:
+            planet["sector"] = await self._translate_cached_text(
+                "dss_sector", sector.casefold(), sector
+            )
         actions = view.get("tacticalActions") or view.get("tactical_actions") or []
-        if not isinstance(actions, list):
+        if not include_actions or not isinstance(actions, list):
             return view
         try:
             from .i18n import format_dss_action
@@ -1048,7 +1174,10 @@ class HelldiversService:
             ):
                 text = action.get(field)
                 if isinstance(text, str):
-                    action[display_field] = await self._translate_cached_text(
+                    static = _COMPANION_STATIC_TRANSLATIONS.get(
+                        " ".join(text.split()).casefold()
+                    )
+                    action[display_field] = static or await self._translate_cached_text(
                         "dss_action", f"{item_id}:{field}", text
                     )
             if isinstance(action.get("name"), str):
@@ -1067,7 +1196,10 @@ class HelldiversService:
 
     async def get_dss_message(self) -> str:
         state = await self._build_war_state()
-        station = await self._prepare_dss_station(self._station_with_planet(state))
+        station = await self._prepare_dss_station(
+            self._station_with_planet(state),
+            include_actions=False,
+        )
         return format_dss_message(station)
 
     async def get_dss_image(self) -> list[Path]:
@@ -1216,7 +1348,7 @@ class HelldiversService:
         if not matches:
             return format_planet_candidates(query, [])
         if len(matches) == 1:
-            return format_planet_message(matches[0])
+            return format_planet_message(await self._prepare_planet(matches[0]))
         # 精确名唯一
         ql = query.lower()
         exact = [
@@ -1226,8 +1358,85 @@ class HelldiversService:
             or str(planet_index_safe(p)) == query
         ]
         if len(exact) == 1:
-            return format_planet_message(exact[0])
-        return format_planet_candidates(query, matches)
+            return format_planet_message(await self._prepare_planet(exact[0]))
+        candidates = copy.deepcopy(matches)
+        await self._localize_planet_rows(candidates, include_english=False)
+        return format_planet_candidates(query, candidates)
+
+    async def _prepare_planet(self, planet: dict[str, Any]) -> dict[str, Any]:
+        view = copy.deepcopy(planet)
+        await self._localize_planet_rows([view], include_english=False)
+        for field in ("sector", "biomeName"):
+            text = view.get(field)
+            if isinstance(text, str) and len(text.strip()) >= 3:
+                view[field] = await self._translate_cached_text(
+                    "planet_detail", field, text
+                )
+        biome = view.get("biome")
+        if isinstance(biome, dict):
+            for field in ("name", "description"):
+                text = biome.get(field)
+                if isinstance(text, str) and len(text.strip()) >= 3:
+                    biome[field] = await self._translate_cached_text(
+                        "planet_biome", field, text
+                    )
+        hazards = view.get("hazards")
+        if isinstance(hazards, list):
+            for index, hazard in enumerate(hazards[:8]):
+                if not isinstance(hazard, dict):
+                    continue
+                for field in ("name", "description"):
+                    text = hazard.get(field)
+                    if isinstance(text, str) and len(text.strip()) >= 3:
+                        hazard[field] = await self._translate_cached_text(
+                            "planet_hazard", f"{index}:{field}", text
+                        )
+        return view
+
+    async def resolve_companion_planet(
+        self, query: str
+    ) -> tuple[str, str | None, str | None]:
+        """Resolve user input to a canonical planet name and Companion slug."""
+        query = (query or "").strip()
+        if not query:
+            return "❌ 用法: /planet <星球名称、编号、slug 或 Companion 链接>", None, None
+
+        normalized = query
+        query_folded = query.casefold()
+        for source_name in known_planet_names():
+            translated = lookup_planet_name(source_name)
+            if translated and translated.casefold() == query_folded:
+                normalized = source_name
+                break
+
+        state = await self._build_war_state()
+        if not state.planets:
+            return "❌ 暂时无法获取星球数据，请稍后重试。", None, None
+        matches = state.find_planets(normalized, limit=8)
+        if not matches:
+            return format_planet_candidates(query, []), None, None
+
+        selected: dict[str, Any] | None = None
+        if len(matches) == 1:
+            selected = matches[0]
+        else:
+            exact_name = normalized.casefold()
+            exact = [
+                planet
+                for planet in matches
+                if planet_name(planet).casefold() == exact_name
+                or str(planet_index(planet)) == normalized
+            ]
+            if len(exact) == 1:
+                selected = exact[0]
+        if selected is None:
+            return format_planet_candidates(query, matches), None, None
+
+        canonical_name = planet_name(selected).strip()
+        if not canonical_name:
+            return "❌ 星球数据缺少名称，无法打开 Companion 页面。", None, None
+        slug = re.sub(r"\s+", "_", canonical_name.casefold())
+        return "", canonical_name, slug
 
     async def get_planet_image(self, query: str) -> tuple[str, list[Path]]:
         query = (query or "").strip()
@@ -1242,7 +1451,7 @@ class HelldiversService:
             p = await self._render_card(card)
             return "", [p] if p else []
         if len(matches) == 1:
-            card = build_planet_card(matches[0])
+            card = build_planet_card(await self._prepare_planet(matches[0]))
             p = await self._render_card(card)
             return "", [p] if p else []
         ql = query.lower()
@@ -1253,12 +1462,20 @@ class HelldiversService:
             or str(planet_index_safe(p)) == query
         ]
         if len(exact) == 1:
-            card = build_planet_card(exact[0])
+            card = build_planet_card(await self._prepare_planet(exact[0]))
             p = await self._render_card(card)
             return "", [p] if p else []
-        card = build_planet_candidates_card(query, matches)
+        candidates = copy.deepcopy(matches)
+        await self._localize_planet_rows(candidates, include_english=False)
+        card = build_planet_candidates_card(query, candidates)
         p = await self._render_card(card)
         return "", [p] if p else []
+
+    async def get_companion_planet_image(
+        self, slug: str
+    ) -> tuple[str, list[Path]]:
+        query = str(slug or "").strip().replace("_", " ")
+        return await self.get_planet_image(query)
 
     async def _prepare_global_events(
         self, events: list[dict[str, Any]], limit: int

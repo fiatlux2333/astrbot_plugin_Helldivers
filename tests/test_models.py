@@ -6,6 +6,7 @@ import sys
 import tempfile
 import types
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 if "astrbot.api" not in sys.modules:
@@ -24,6 +25,7 @@ if "astrbot.api" not in sys.modules:
 from astrbot_plugin_Helldivers.api_client import HD2Client
 from astrbot_plugin_Helldivers.cache import CacheService
 from astrbot_plugin_Helldivers.campaign_trends import CampaignTrendStore
+from astrbot_plugin_Helldivers.formatters import format_dss_message
 from astrbot_plugin_Helldivers.services import HelldiversService
 from astrbot_plugin_Helldivers.remote_image_cache import ALLOWED_IMAGE_MIMES
 from astrbot_plugin_Helldivers.stats_model import build_stats_view_model
@@ -33,6 +35,19 @@ from astrbot_plugin_Helldivers.war_state import WarState, campaign_faction
 
 
 class ModelTests(unittest.TestCase):
+    def test_dss_text_omits_tactical_actions(self) -> None:
+        message = format_dss_message(
+            {
+                "id32": 1,
+                "planet": {"name": "梅萨", "currentOwner": "Humans"},
+                "tacticalActions": [
+                    {"display_name": "轨道封锁", "status": 2}
+                ],
+            }
+        )
+        self.assertNotIn("战术行动", message)
+        self.assertNotIn("轨道封锁", message)
+
     def test_bilibili_long_image_pixel_limit_covers_current_report(self) -> None:
         schema = json.loads(
             (Path(__file__).parents[1] / "_conf_schema.json").read_text(
@@ -190,6 +205,76 @@ class ApiClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.external_kwargs["timeout"], 10.0)
         self.assertFalse(client.external_kwargs["allow_private"])
 
+    async def test_personal_order_builtin_source_keeps_only_active_po(self) -> None:
+        class RecordingClient(HD2Client):
+            async def request_external_json(self, url, **kwargs):
+                return {
+                    "timestampUtc": datetime.now(timezone.utc).isoformat(),
+                    "data": [
+                        {
+                            "expiresIn": 100,
+                            "setting": {"type": 0},
+                        },
+                        {
+                            "id32": 42,
+                            "expiresIn": 100,
+                            "setting": {"type": 2},
+                        },
+                        {
+                            "expiresIn": 0,
+                            "setting": {"type": 2},
+                        },
+                    ],
+                }
+
+        result = await RecordingClient().fetch_personal_order()
+        self.assertEqual(result, [{"id32": 42, "expiresIn": 100, "setting": {"type": 2}}])
+
+    async def test_personal_order_builtin_source_rejects_stale_snapshot(self) -> None:
+        class RecordingClient(HD2Client):
+            async def request_external_json(self, url, **kwargs):
+                return {
+                    "timestampUtc": (
+                        datetime.now(timezone.utc) - timedelta(days=4)
+                    ).isoformat(),
+                    "data": [
+                        {
+                            "expiresIn": 100,
+                            "setting": {"type": 2},
+                        }
+                    ],
+                }
+
+        self.assertIsNone(await RecordingClient().fetch_personal_order())
+
+    async def test_personal_order_expiration_is_adjusted_for_snapshot_age(self) -> None:
+        class RecordingClient(HD2Client):
+            async def request_external_json(self, url, **kwargs):
+                return {
+                    "timestampUtc": (
+                        datetime.now(timezone.utc) - timedelta(hours=2)
+                    ).isoformat(),
+                    "data": [
+                        {
+                            "id32": 1,
+                            "expiresIn": 3600,
+                            "setting": {"type": 2},
+                        },
+                        {
+                            "id32": 2,
+                            "expiresIn": 10800,
+                            "setting": {"type": 2},
+                        },
+                    ],
+                }
+
+        result = await RecordingClient().fetch_personal_order()
+        self.assertIsInstance(result, list)
+        assert isinstance(result, list)
+        self.assertEqual([item["id32"] for item in result], [2])
+        self.assertGreater(result[0]["expiresIn"], 3500)
+        self.assertLessEqual(result[0]["expiresIn"], 3600)
+
     async def test_official_steam_news_uses_single_attempt(self) -> None:
         class RecordingClient(HD2Client):
             def __init__(self) -> None:
@@ -218,8 +303,99 @@ class ApiClientTests(unittest.IsolatedAsyncioTestCase):
         updates = await FallbackClient().fetch_steam_updates()
         self.assertEqual(updates, [{"id": "fallback"}])
 
+    async def test_companion_gww_news_is_selected_by_route_id(self) -> None:
+        class CompanionClient(HD2Client):
+            async def request_json(self, method, path, **kwargs):
+                self.request = (method, path, kwargs)
+                return {
+                    "clientTime": 1_785_937_046_432,
+                    "timeSinceStart": 79_896_733,
+                    "news": [
+                        {
+                            "id": "3844",
+                            "published": 77_821_817,
+                            "type": 0,
+                            "message": "<i=3>NEW MAJOR ORDER</i>\n\nLiberate MEISSA",
+                        }
+                    ],
+                }
+
+        client = CompanionClient()
+        article = await client.fetch_companion_gww_news(3844)
+        self.assertIsNotNone(article)
+        assert article is not None
+        self.assertEqual(article["id"], 3844)
+        self.assertEqual(article["source"], "helldiverscompanion")
+        self.assertTrue(str(article["published"]).endswith("Z"))
+        self.assertEqual(client.request[0], "GET")
+        self.assertEqual(client.request[1], client.COMPANION_WAR_DATA_URL)
+
+    async def test_companion_gww_news_returns_none_for_unknown_id(self) -> None:
+        class CompanionClient(HD2Client):
+            async def request_json(self, method, path, **kwargs):
+                return {"news": [{"id": 1, "message": "test"}]}
+
+        self.assertIsNone(await CompanionClient().fetch_companion_gww_news(3844))
+
 
 class LifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_failed_companion_translation_is_not_cacheable(self) -> None:
+        class FailingTranslator:
+            async def translate_texts(self, texts):
+                return list(texts)
+
+        class EmptyCache:
+            provider_fingerprint = "test"
+
+            async def get(self, namespace, item_id):
+                return None
+
+            async def store(self, *args, **kwargs):
+                raise AssertionError("failed translations must not be cached")
+
+        service = object.__new__(HelldiversService)
+        service.translator = FailingTranslator()
+        service.translation_cache = EmptyCache()
+        target = types.SimpleNamespace(kind="news_latest")
+
+        outcome = await service.translate_companion_fragments(
+            target,
+            ["An unmapped English briefing sentence."],
+        )
+
+        self.assertFalse(outcome.cacheable)
+        self.assertEqual(outcome.translations, {})
+
+    async def test_dss_message_preparation_skips_tactical_translation(self) -> None:
+        translated: list[str] = []
+
+        async def localize_planets(rows, *, include_english=True):
+            return None
+
+        async def translate(namespace, item_id, value):
+            translated.append(value)
+            return f"translated:{value}"
+
+        service = object.__new__(HelldiversService)
+        service._localize_planet_rows = localize_planets
+        service._translate_cached_text = translate
+
+        station = await service._prepare_dss_station(
+            {
+                "planet": {},
+                "tacticalActions": [
+                    {
+                        "name": "Unknown Action",
+                        "description": "Unknown action description",
+                    }
+                ],
+            },
+            include_actions=False,
+        )
+
+        self.assertIsNotNone(station)
+        self.assertEqual(translated, [])
+
     async def test_cache_one_shot_task_is_cancelled_on_stop(self) -> None:
         started = asyncio.Event()
         cancelled = asyncio.Event()

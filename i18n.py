@@ -481,6 +481,7 @@ _PLANET_NAMES: Final[dict[str, str]] = {
     "oasis": "绿洲",
     "yed prior": "叶德·普赖尔",
     "gaellivare": "盖利瓦雷",
+    "meissa": "梅莎",
 }
 
 _DSS_ACTION_NAMES: Final[dict[str, str]] = {

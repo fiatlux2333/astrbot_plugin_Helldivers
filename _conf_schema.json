@@ -25,7 +25,7 @@
   "api_user_agent": {
     "description": "User-Agent",
     "type": "string",
-    "default": "astrbot_plugin_Helldivers/1.8.2"
+    "default": "astrbot_plugin_Helldivers/1.8.5"
   },
   "api_timeout": {
     "description": "API 请求超时（秒）",
@@ -37,6 +37,63 @@
     "type": "string",
     "hint": "例如 http://127.0.0.1:7890，留空不使用",
     "default": ""
+  },
+  "enable_companion_screenshots": {
+    "description": "启用 Helldivers Companion 图片指令",
+    "type": "bool",
+    "hint": "启用 /hd2news、/dss 与 /planet 的 Companion 原网页截图；失败时自动回退 Pillow",
+    "default": true
+  },
+  "companion_render_backend": {
+    "description": "Companion 图片后端",
+    "type": "string",
+    "hint": "playwright：容器内 Chromium 原网页截图并支持翻译（推荐）；local：Pillow 数据卡片；browserless：仅在关闭翻译时使用远程英文网页截图",
+    "default": "playwright"
+  },
+  "companion_browserless_url": {
+    "description": "Browserless 截图服务地址",
+    "type": "string",
+    "hint": "同一 Docker 网络可使用 http://browserless:3000；也可填写 Browserless Cloud 地址",
+    "default": "http://browserless:3000"
+  },
+  "companion_browserless_token": {
+    "description": "Browserless Token（可选）",
+    "type": "text",
+    "hint": "自建服务未配置 Token 时留空；不要提交到仓库",
+    "obvious_hint": true,
+    "default": ""
+  },
+  "companion_browserless_proxy_url": {
+    "description": "访问 Browserless 服务所用代理（可选）",
+    "type": "string",
+    "hint": "Browserless 在同一 Docker 网络时通常留空",
+    "default": ""
+  },
+  "companion_screenshot_timeout": {
+    "description": "Companion 截图总超时（秒）",
+    "type": "int",
+    "default": 90
+  },
+  "companion_screenshot_wait_ms": {
+    "description": "Companion 页面加载后的额外等待时间（毫秒）",
+    "type": "int",
+    "hint": "SPA 页面和图表需要等待；建议 3000–8000",
+    "default": 5000
+  },
+  "companion_screenshot_cache_ttl": {
+    "description": "Companion 截图缓存时间（秒）",
+    "type": "int",
+    "default": 300
+  },
+  "companion_screenshot_max_bytes": {
+    "description": "Companion 单张截图最大字节数",
+    "type": "int",
+    "default": 12582912
+  },
+  "companion_screenshot_max_pixels": {
+    "description": "Companion 单张截图最大像素数",
+    "type": "int",
+    "default": 20000000
   },
   "enable_bilibili_galaxy_news": {
     "description": "启用 B站银河快报自动推送",
@@ -302,10 +359,10 @@
     "default": ""
   },
   "personal_order_api_url": {
-    "description": "个人任务 JSON 数据源 URL（可选）",
+    "description": "个人任务 JSON 数据源 URL",
     "type": "string",
-    "hint": "Personal Order 不在公开社区 API 中；默认仅允许公网 HTTPS 地址",
-    "default": ""
+    "hint": "默认使用 Companion 社区 CDN；插件会拒绝超过 3 天的旧快照。未发现 Arrowhead 官方公开 Personal Order API",
+    "default": "https://cdn.helldiverscompanion.com/live/personalOrders/current.json"
   },
   "allow_private_personal_order_url": {
     "description": "允许个人指令数据源访问私有网络",

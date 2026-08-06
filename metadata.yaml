@@ -1,5 +1,5 @@
 name: astrbot_plugin_Helldivers
-display_name: 绝地潜兵2数据查询助手
+display_name: 绝地潜兵2情报助手
 short_desc: HD2 银河战争情报 / DSS / 地图 / Steam
 desc: |
   绝地潜兵2 图片情报插件。提供以下功能：
@@ -13,7 +13,7 @@ desc: |
   - Steam 官方更新公告
   - 战线战况
   - Helldivers Wiki 查询
-version: 1.8.2
+version: 1.8.5
 author: 牡蛎
 repo: https://github.com/fiatlux2333/astrbot_plugin_Helldivers
 astrbot_version: ">=4.16,<5"

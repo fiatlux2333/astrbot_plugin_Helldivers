@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -44,6 +45,7 @@ class TranslationService:
         self.enabled = enabled
         self._session = session
         self._own_session = False
+        self._openai_lock = asyncio.Lock()
         requested_mode = (mode or "auto").strip().lower()
         if requested_mode not in {"builtin", "openai", "auto"}:
             logger.warning(
@@ -72,7 +74,7 @@ class TranslationService:
 
     def provider_fingerprint(self) -> str:
         parts = (
-            "translation-protocol-v2",
+            "translation-protocol-v3-hd2-localization",
             self.mode,
             urlsplit(self.api_url).scheme.lower(),
             urlsplit(self.api_url).netloc.lower(),
@@ -122,6 +124,37 @@ class TranslationService:
         # 裸域名/base：补全
         return url + "/v1/chat/completions"
 
+    @staticmethod
+    def _localization_system_prompt(
+        lang_name: str,
+        *,
+        batch: bool,
+    ) -> str:
+        prompt = (
+            "你是《绝地潜兵2》简体中文本地化编辑，不是逐词翻译器。"
+            f"请将英文游戏文本改写为自然、利落、易读的{lang_name}。"
+            "译文要符合超级地球官方广播、军事简报和科幻战争 UI 的语气；"
+            "允许调整英语语序、合并重复表达，禁止保留生硬机翻句式。"
+            "固定术语：Helldivers=绝地潜兵，Super Earth=超级地球，"
+            "Managed Democracy=管理式民主，Ministry of Truth=真理部，"
+            "Major Order=最高指令，Democracy Space Station/DSS=民主空间站/DSS，"
+            "Terminids=终结族，Automatons=机器人，Illuminate=光能族，"
+            "Defense Campaigns=防御战役，Liberation Campaigns=解放战役，"
+            "Stratagem=战略配备，Hellpod=地狱舱，Eagle=飞鹰，Orbital=轨道。"
+            "星球、扇区和行动名称优先采用插件提供的固定译名；"
+            "没有固定译名时使用简洁稳定的音译，不要自行发挥。"
+            "保留数字、百分比、日期、倒计时、ID、单位和原有换行；"
+            "UI 标题尽量短，正文通顺但不要添加原文不存在的解释。"
+        )
+        if batch:
+            return (
+                prompt
+                + "输入是 JSON 字符串数组。必须返回 JSON 对象，格式为"
+                + '{"translations":["译文1","译文2"]}。'
+                + "译文数组数量和顺序必须与输入完全一致，不要输出其他内容。"
+            )
+        return prompt + "只返回译文，不要解释、不要引号。"
+
     async def translate_text(self, text: str, to_lang: str | None = None) -> str:
         if not text or not text.strip() or len(text.strip()) < 3:
             return text or ""
@@ -130,6 +163,46 @@ class TranslationService:
         if self.mode == "openai":
             return await self._translate_openai(text, to_lang)
         return await self._translate_builtin(text, to_lang)
+
+    async def translate_texts(
+        self,
+        texts: list[str],
+        to_lang: str | None = None,
+    ) -> list[str]:
+        """Translate several independent fragments with one provider request."""
+        sources = [str(text or "") for text in texts]
+        if not sources or not self.enabled or not self.api_url:
+            return sources
+        if len(sources) == 1:
+            return [await self.translate_text(sources[0], to_lang)]
+        if self.mode == "openai":
+            return await self._translate_openai_batch(sources, to_lang)
+        return await self._translate_builtin_batch(sources, to_lang)
+
+    async def _translate_builtin_batch(
+        self,
+        texts: list[str],
+        to_lang: str | None,
+    ) -> list[str]:
+        marked = "\n".join(
+            f"[[HD2_{index}]] {text.strip()}" for index, text in enumerate(texts)
+        )
+        translated = await self._translate_builtin(marked, to_lang)
+        if not translated or translated == marked:
+            return texts
+        results: list[str] = []
+        for index in range(len(texts)):
+            start = f"[[HD2_{index}]]"
+            end = f"[[HD2_{index + 1}]]"
+            if start not in translated:
+                return texts
+            value = translated.split(start, 1)[1]
+            if index + 1 < len(texts):
+                if end not in value:
+                    return texts
+                value = value.split(end, 1)[0]
+            results.append(value.strip() or texts[index])
+        return results
 
     @staticmethod
     def _extract_builtin_translation(data: dict[str, Any]) -> str:
@@ -233,12 +306,7 @@ class TranslationService:
             return text
         lang = to_lang or self.target_lang or "zh"
         lang_name = "简体中文" if lang.startswith("zh") else lang
-        system = (
-            f"你是 Helldivers 2（绝地潜兵2）游戏本地化助手。"
-            f"将用户提供的英文游戏文本翻译为{lang_name}，"
-            f"保留阵营/专有名词/星球名的习惯译法，语气贴合游戏。"
-            f"只返回译文，不要解释、不要引号。"
-        )
+        system = self._localization_system_prompt(lang_name, batch=False)
         payload = {
             "model": self.model,
             "messages": [
@@ -248,6 +316,59 @@ class TranslationService:
             "temperature": 0.3,
             "stream": False,
         }
+        content = await self._request_openai_content(payload)
+        content = content.strip().strip('"').strip("“”").strip()
+        return content if content and content != text.strip() else text
+
+    @staticmethod
+    def _extract_openai_batch(content: str, expected: int) -> list[str] | None:
+        raw = str(content or "").strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+            raw = re.sub(r"\s*```$", "", raw)
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        values = payload.get("translations") if isinstance(payload, dict) else payload
+        if not isinstance(values, list) or len(values) != expected:
+            return None
+        if not all(isinstance(value, str) and value.strip() for value in values):
+            return None
+        return [value.strip() for value in values]
+
+    async def _translate_openai_batch(
+        self,
+        texts: list[str],
+        to_lang: str | None,
+    ) -> list[str]:
+        if not self.api_key:
+            logger.warning("[HD2] openai 翻译模式缺少 api_key，返回原文")
+            return texts
+        lang = to_lang or self.target_lang or "zh"
+        lang_name = "简体中文" if lang.startswith("zh") else lang
+        system = self._localization_system_prompt(lang_name, batch=True)
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {
+                    "role": "user",
+                    "content": json.dumps(texts, ensure_ascii=False),
+                },
+            ],
+            "temperature": 0.2,
+            "stream": False,
+        }
+        content = await self._request_openai_content(payload)
+        translated = self._extract_openai_batch(content, len(texts))
+        if translated is None:
+            if content:
+                logger.warning("[HD2] openai 批量翻译返回格式无效")
+            return texts
+        return translated
+
+    async def _request_openai_content(self, payload: dict[str, Any]) -> str:
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
@@ -255,41 +376,49 @@ class TranslationService:
             "Accept": "application/json",
         }
         try:
-            session = await self._ensure_session()
-            async with session.post(
-                self._chat_url(),
-                json=payload,
-                headers=headers,
-                proxy=self.proxy_url,
-                timeout=self.timeout,
-            ) as resp:
-                if resp.status != 200:
-                    body = ""
-                    try:
-                        body = (await resp.text())[:160]
-                    except Exception:
-                        pass
-                    logger.warning(
-                        f"[HD2] openai 翻译 status={resp.status} body={body}"
-                    )
-                    return text
-                data = await resp.json(content_type=None)
-                choices = (data or {}).get("choices") or []
-                if not choices:
-                    return text
-                content = (
-                    (choices[0].get("message") or {}).get("content") or ""
-                ).strip()
-                # 去掉可能的包裹引号
-                content = content.strip().strip('"').strip("“”").strip()
-                if content and content != text.strip():
-                    return content
-                return text
+            async with self._openai_lock:
+                session = await self._ensure_session()
+                for attempt in range(2):
+                    async with session.post(
+                        self._chat_url(),
+                        json=payload,
+                        headers=headers,
+                        proxy=self.proxy_url,
+                        timeout=self.timeout,
+                    ) as resp:
+                        if resp.status == 200:
+                            data = await resp.json(content_type=None)
+                            choices = (data or {}).get("choices") or []
+                            if not choices:
+                                return ""
+                            return str(
+                                (choices[0].get("message") or {}).get("content")
+                                or ""
+                            ).strip()
+                        body = ""
+                        try:
+                            body = (await resp.text())[:160]
+                        except Exception:
+                            pass
+                        if resp.status in {500, 502, 503, 504} and attempt == 0:
+                            logger.warning(
+                                "[HD2] openai 翻译 status=%s，2 秒后重试一次",
+                                resp.status,
+                            )
+                            await asyncio.sleep(2)
+                            continue
+                        logger.warning(
+                            "[HD2] openai 翻译 status=%s body=%s",
+                            resp.status,
+                            body,
+                        )
+                        return ""
+                return ""
         except asyncio.CancelledError:
             raise
         except Exception as e:
             logger.warning(f"[HD2] openai 翻译失败: {e}")
-            return text
+            return ""
 
 
 class TranslationCache:
