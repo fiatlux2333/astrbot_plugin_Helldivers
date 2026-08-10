@@ -20,6 +20,7 @@ from astrbot_plugin_Helldivers.companion_screenshot import (
     build_browserless_endpoint,
     build_browserless_payload,
     companion_dss_target,
+    companion_homepage_target,
     companion_latest_news_target,
     parse_companion_news_target,
     parse_companion_planet_target,
@@ -58,6 +59,15 @@ class CompanionTargetTests(unittest.TestCase):
         )
         self.assertEqual(dss.kind, "station")
         self.assertEqual(dss.clip, (209, 82, 862, 734))
+
+    def test_homepage_target_captures_full_viewport(self) -> None:
+        home = companion_homepage_target()
+        self.assertEqual(home.kind, "homepage")
+        self.assertEqual(home.url, "https://helldiverscompanion.com/")
+        self.assertEqual(home.value, "home")
+        self.assertEqual(home.viewport, (1920, 1080))
+        self.assertEqual(home.clip, (0, 0, 1920, 1080))
+        self.assertEqual(home.cache_name, "companion_homepage_home.png")
 
     def test_untrusted_or_wrong_routes_are_rejected(self) -> None:
         for value in (

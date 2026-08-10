@@ -30,7 +30,7 @@
   "api_timeout": {
     "description": "API 请求超时（秒）",
     "type": "int",
-    "default": 30
+    "default": 20
   },
   "proxy_url": {
     "description": "HTTP 代理（可选）",
@@ -41,7 +41,7 @@
   "enable_companion_screenshots": {
     "description": "启用 Helldivers Companion 图片指令",
     "type": "bool",
-    "hint": "启用 /hd2news、/dss 与 /planet 的 Companion 原网页截图；失败时自动回退 Pillow",
+    "hint": "启用 /hd2news、/dss 与 /planet 的 Companion 原网页截图；失败时返回错误提示",
     "default": true
   },
   "companion_render_backend": {
@@ -72,13 +72,31 @@
   "companion_screenshot_timeout": {
     "description": "Companion 截图总超时（秒）",
     "type": "int",
-    "default": 90
+    "default": 60
   },
   "companion_screenshot_wait_ms": {
     "description": "Companion 页面加载后的额外等待时间（毫秒）",
     "type": "int",
     "hint": "SPA 页面和图表需要等待；建议 3000–8000",
     "default": 5000
+  },
+  "companion_page_load_timeout": {
+    "description": "Companion 页面数据加载等待时间（秒）",
+    "type": "float",
+    "hint": "等待 PLEASE WAIT DEMOCRATICALLY 消失或目标页面结构就绪；云服务器建议 20–40",
+    "default": 20
+  },
+  "companion_translation_timeout": {
+    "description": "Companion 前台翻译等待时间（秒）",
+    "type": "float",
+    "hint": "免费模型建议 45–90；时间到后发送已完成的部分翻译，后台继续写入缓存",
+    "default": 60
+  },
+  "companion_translation_batch_timeout": {
+    "description": "Companion 单批翻译等待时间（秒）",
+    "type": "float",
+    "hint": "每批最多翻译 16 段；免费模型建议 15–25，且不得高于前台翻译等待时间",
+    "default": 20
   },
   "companion_screenshot_cache_ttl": {
     "description": "Companion 截图缓存时间（秒）",
@@ -94,6 +112,30 @@
     "description": "Companion 单张截图最大像素数",
     "type": "int",
     "default": 20000000
+  },
+  "companion_show_inactive": {
+    "description": "Companion 首页显示低活跃度战役卡片",
+    "type": "bool",
+    "hint": "启用后 /companion 会自动切换 Inactive Campaigns 设置为 Shown，截图含更多战役卡片（约 +1.5s）。注意：该设置会持久化到网站，可能影响你浏览器访问 Companion 的默认状态",
+    "default": false
+  },
+  "companion_warmup_enabled": {
+    "description": "Companion 截图后台预热",
+    "type": "bool",
+    "hint": "启用后插件在后台定时截图并预翻译 Companion 页面，用户请求时直接返回已翻译的缓存截图，无需等待翻译 API",
+    "default": true
+  },
+  "companion_warmup_interval": {
+    "description": "Companion 后台预热间隔（秒）",
+    "type": "int",
+    "hint": "每隔多久在后台重新截图翻译一次；建议 300（5 分钟）；最小 60",
+    "default": 300
+  },
+  "companion_warmup_kinds": {
+    "description": "Companion 后台预热页面",
+    "type": "string",
+    "hint": "逗号分隔，可选值：news_latest（最新新闻）、station（民主空间站）、homepage（首页）；默认预热新闻和空间站",
+    "default": "news_latest,station"
   },
   "enable_bilibili_galaxy_news": {
     "description": "启用 B站银河快报自动推送",
@@ -148,34 +190,34 @@
     "description": "API 缓存刷新间隔（秒）",
     "type": "int",
     "hint": "建议 120–300。过短容易触发 429 限流",
-    "default": 180
+    "default": 300
   },
   "request_delay": {
     "description": "批量请求间隔（秒）",
     "type": "int",
     "hint": "刷新多类数据时的请求间隔，建议 ≥3",
-    "default": 4
+    "default": 6
   },
   "min_request_interval": {
     "description": "任意两次 API 请求最小间隔（秒）",
     "type": "float",
     "hint": "全局限流，降低 429 概率",
-    "default": 1.5
+    "default": 3
   },
   "retry_base_delay": {
     "description": "API 重试基础延迟（秒）",
     "type": "float",
-    "default": 5.0
+    "default": 3.0
   },
   "retry_max_delay": {
     "description": "API 重试最大延迟（秒）",
     "type": "float",
-    "default": 45.0
+    "default": 15.0
   },
   "retry_max_attempts": {
     "description": "API 最大重试次数",
     "type": "int",
-    "default": 3
+    "default": 2
   },
   "enable_translation": {
     "description": "启用 AI 智能翻译",
@@ -198,8 +240,9 @@
   },
   "translation_api_key": {
     "description": "翻译 API Key（openai 模式）",
-    "type": "string",
+    "type": "text",
     "hint": "OpenAI 兼容接口的 Bearer Token；builtin 模式可留空",
+    "obvious_hint": true,
     "default": ""
   },
   "translation_model": {
@@ -208,10 +251,22 @@
     "hint": "如 gpt-4o-mini、deepseek-chat 等",
     "default": "gpt-4o-mini"
   },
+  "translation_stream": {
+    "description": "OpenAI 兼容翻译使用流式响应",
+    "type": "bool",
+    "hint": "开启后通过 SSE 持续接收译文；免费/慢速模型建议关闭，流式更容易触发超时和异常",
+    "default": false
+  },
+  "translation_max_tokens": {
+    "description": "翻译输出最大 token 数",
+    "type": "int",
+    "hint": "限制单次翻译的输出长度，防止免费模型输出爆炸（16条短语约需800-1000 token）。0=不限制。建议 1000-1500",
+    "default": 1200
+  },
   "translation_timeout": {
     "description": "翻译请求超时（秒）",
     "type": "int",
-    "default": 30
+    "default": 20
   },
   "translation_target_lang": {
     "description": "翻译目标语言",
@@ -221,8 +276,20 @@
   "translation_retry_fallback_seconds": {
     "description": "翻译失败回退缓存时间（秒）",
     "type": "int",
-    "hint": "失败后只短暂保留英文原文，之后重新尝试翻译",
-    "default": 900
+    "hint": "失败后短暂记录失败状态，避免连续打爆接口；到期后重新尝试翻译",
+    "default": 180
+  },
+  "translation_error_cooldown_seconds": {
+    "description": "翻译接口错误冷却时间（秒）",
+    "type": "int",
+    "hint": "OpenAI 兼容接口返回 429/567/5xx 后暂停翻译请求，避免拥塞时连续漏翻",
+    "default": 120
+  },
+  "drop_untranslated_content": {
+    "description": "剔除未翻译英文内容",
+    "type": "bool",
+    "hint": "启用后翻译失败或译文等于原文时，不再把明显英文正文发送出去",
+    "default": true
   },
   "rotation_dispatches": {
     "description": "快讯翻译轮转间隔（秒）",
@@ -298,7 +365,7 @@
   "translate_wiki": {
     "description": "自动翻译 Wiki 摘要为中文",
     "type": "bool",
-    "hint": "依赖 enable_translation；失败回退英文",
+    "hint": "依赖 enable_translation；启用 drop_untranslated_content 时失败不发送英文摘要",
     "default": true
   },
   "wiki_cache_ttl": {
@@ -333,25 +400,6 @@
     "options": ["uploaded_reference", "derived"],
     "hint": "uploaded_reference 使用上传的 map.png 作为圆形银河基底；derived 使用程序化地图",
     "default": "uploaded_reference"
-  },
-  "ui_language": {
-    "description": "图片 UI 语言",
-    "type": "string",
-    "options": ["zh-CN"],
-    "default": "zh-CN"
-  },
-  "external_asset_mode": {
-    "description": "外部图片素材模式",
-    "type": "string",
-    "options": ["off", "cache_only", "prefetch"],
-    "hint": "默认关闭；外部 wiki 图片仅允许审核过的 manifest，本地用户素材不受影响",
-    "default": "off"
-  },
-  "wiki_asset_enabled": {
-    "description": "启用审核过的 Wiki 图片素材",
-    "type": "bool",
-    "hint": "需要显式 manifest；不会按关键词抓取图片",
-    "default": false
   },
   "asset_manifest_path": {
     "description": "本地图片素材 manifest 路径",

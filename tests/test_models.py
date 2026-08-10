@@ -8,6 +8,7 @@ import types
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 if "astrbot.api" not in sys.modules:
     astrbot = types.ModuleType("astrbot")
@@ -339,6 +340,63 @@ class ApiClientTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_companion_batch_timeout_keeps_request_running_for_cache(self) -> None:
+        release = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        class SlowTranslator:
+            async def translate_texts(self, texts):
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+                return ["已完成的后台译文" for _ in texts]
+
+        class EmptyCache:
+            provider_fingerprint = "test"
+
+            def __init__(self):
+                self.stored = []
+
+            async def get(self, namespace, item_id):
+                return None
+
+            async def store(self, *args, **kwargs):
+                self.stored.append((args, kwargs))
+
+        async def immediate_timeout(awaitable, timeout):
+            raise asyncio.TimeoutError
+
+        service = object.__new__(HelldiversService)
+        service.translator = SlowTranslator()
+        service.translation_cache = EmptyCache()
+        service.companion_translation_batch_timeout = 4.5
+        service.companion_translation_budget = 30.0
+        service._companion_translation_tasks = set()
+        target = types.SimpleNamespace(kind="news_latest")
+
+        with patch(
+            "astrbot_plugin_Helldivers.services.asyncio.wait_for",
+            new=immediate_timeout,
+        ):
+            outcome = await service.translate_companion_fragments(
+                target,
+                ["An English briefing that should finish in the background."],
+            )
+
+        self.assertEqual(outcome.translations, {})
+        self.assertEqual(len(service._companion_translation_tasks), 1)
+        self.assertFalse(cancelled.is_set())
+
+        release.set()
+        await asyncio.gather(*service._companion_translation_tasks)
+        await asyncio.sleep(0)
+
+        self.assertFalse(cancelled.is_set())
+        self.assertEqual(len(service.translation_cache.stored), 1)
+        self.assertEqual(service._companion_translation_tasks, set())
+
     async def test_failed_companion_translation_is_not_cacheable(self) -> None:
         class FailingTranslator:
             async def translate_texts(self, texts):
@@ -364,7 +422,66 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertFalse(outcome.cacheable)
+        self.assertFalse(outcome.complete)
+        self.assertEqual(outcome.untranslated_count, 1)
         self.assertEqual(outcome.translations, {})
+
+    async def test_failed_cached_translation_is_dropped_by_default(self) -> None:
+        class FailingTranslator:
+            async def translate_text(self, text):
+                return text
+
+        class EmptyCache:
+            provider_fingerprint = "test"
+
+            async def get(self, namespace, item_id):
+                return None
+
+            async def store(self, *args, **kwargs):
+                self.stored = (args, kwargs)
+
+        service = object.__new__(HelldiversService)
+        service.enable_translation = True
+        service.drop_untranslated_content = True
+        service.translator = FailingTranslator()
+        service.translation_cache = EmptyCache()
+
+        result = await service._translate_cached_text(
+            "news",
+            "1",
+            "An unmapped English briefing sentence.",
+        )
+
+        self.assertEqual(result, "")
+
+    async def test_failed_companion_translation_cache_marks_incomplete(self) -> None:
+        class UnusedTranslator:
+            async def translate_texts(self, texts):
+                raise AssertionError("failed cache should suppress retry until TTL")
+
+        class FailedCache:
+            provider_fingerprint = "test"
+
+            async def get(self, namespace, item_id):
+                return {
+                    "original_text": "Untranslated station briefing",
+                    "translated_text": "Untranslated station briefing",
+                    "success": False,
+                }
+
+        service = object.__new__(HelldiversService)
+        service.translator = UnusedTranslator()
+        service.translation_cache = FailedCache()
+        target = types.SimpleNamespace(kind="station")
+
+        outcome = await service.translate_companion_fragments(
+            target,
+            ["Untranslated station briefing"],
+        )
+
+        self.assertFalse(outcome.cacheable)
+        self.assertFalse(outcome.complete)
+        self.assertEqual(outcome.untranslated_count, 1)
 
     async def test_dss_message_preparation_skips_tactical_translation(self) -> None:
         translated: list[str] = []

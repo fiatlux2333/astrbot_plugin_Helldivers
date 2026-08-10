@@ -16,6 +16,8 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import aiohttp
 from PIL import Image, UnidentifiedImageError
 
+from astrbot.api import logger
+
 COMPANION_ORIGIN = "https://helldiverscompanion.com/"
 COMPANION_HOST = "helldiverscompanion.com"
 
@@ -62,10 +64,26 @@ _PREPARE_CAPTURE_SCRIPT = r"""
 
   let root = null;
   if (kind === "news_latest") {
-    root = Array.from(document.querySelectorAll("div.inline-block")).find((node) => {
-      const text = (node.innerText || "").toUpperCase();
-      return text.includes("PROVIDED BY THE MINISTRY OF TRUTH");
+    const relativeTime = /(?:JUST NOW|MINUTES? AGO|HOURS? AGO|DAYS? AGO|TODAY|YESTERDAY)/i;
+    const candidates = Array.from(document.querySelectorAll(
+      "article, div.inline-block, [class*='news'], [class*='News'], [data-news]"
+    )).filter((node) => {
+      const text = (node.innerText || "").trim();
+      const rect = node.getBoundingClientRect();
+      return text.length > 200 &&
+             relativeTime.test(text) &&
+             rect.width >= 500 &&
+             rect.height >= 250 &&
+             rect.width > 0 &&
+             rect.height > 0;
     });
+    // The DOM is ordered newest-first. Do not sort by area: nested elements
+    // from older cards are often smaller and were incorrectly selected.
+    root = candidates.sort((a, b) => {
+      const ar = a.getBoundingClientRect();
+      const br = b.getBoundingClientRect();
+      return ar.top - br.top || br.width * br.height - ar.width * ar.height;
+    })[0] || null;
   } else if (kind === "station") {
     const candidates = Array.from(document.querySelectorAll("div.flex.flex-col.gap-2"))
       .filter((node) => {
@@ -84,7 +102,9 @@ _PREPARE_CAPTURE_SCRIPT = r"""
     root = document.querySelector(".entire_page") ||
            document.querySelector(".page_wrapper");
   }
-  root ||= document.body;
+  root ||= kind === "news_latest"
+    ? (document.querySelector("main") || document.body)
+    : document.body;
   root.setAttribute("data-hd2-capture-root", "true");
 
   const nodes = [];
@@ -125,6 +145,73 @@ _APPLY_TRANSLATIONS_SCRIPT = r"""
 }
 """.strip()
 
+# Toggle the "Inactive Campaigns" setting (low-activity card visibility) to Shown
+# via in-app hash navigation. Runs inside the page, returns true on success.
+# The site stores the choice in localStorage["C-04"]; values are non-ASCII /
+# obfuscated, so we drive the real toggle control rather than forging storage.
+_COMPANION_SHOW_INACTIVE_SCRIPT = r"""
+async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const hasInactiveText = () =>
+    Array.from(document.querySelectorAll("*")).some(
+      (el) => (el.textContent || "").trim() === "Inactive Campaigns"
+    );
+
+  try {
+    // 1. go to settings and wait for the row to render
+    location.hash = "settings";
+    for (let i = 0; i < 40; i++) {
+      if (hasInactiveText()) break;
+      await sleep(200);
+    }
+    if (!hasInactiveText()) return false;
+
+    // 2. find the "Shown" icon (right-arrow polygon "8 16...") and click it
+    const icNode = Array.from(document.querySelectorAll("*")).find(
+      (el) => (el.textContent || "").trim() === "Inactive Campaigns"
+    );
+    let row = icNode;
+    for (let i = 0; i < 5 && row; i++) {
+      row = row.parentElement;
+      if ((row?.className || "").toString().includes("min-h-[60px]")) break;
+    }
+    if (!row) return false;
+    const icons = Array.from(row.querySelectorAll(".cursor-pointer") || []);
+    const target = icons.find(
+      (ic) =>
+        (ic.querySelector("polygon")?.getAttribute("points") || "").startsWith(
+          "8 16"
+        )
+    );
+    if (!target) return false;
+    const r = target.getBoundingClientRect();
+    target.dispatchEvent(
+      new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: r.x + r.width / 2,
+        clientY: r.y + r.height / 2,
+      })
+    );
+    await sleep(500); // let localStorage persist the change
+
+    // 3. wait for the fuller card list
+    for (let i = 0; i < 40; i++) {
+      const count = document.querySelectorAll(".planets-list > *").length;
+      if (count > 10) return true;
+      await sleep(200);
+    }
+    return true; // still return true even if count threshold not met
+  } finally {
+    // CRITICAL: always return to the homepage, even on failure — otherwise
+    // the screenshot captures the settings page.
+    location.hash = "";
+    await sleep(500);
+  }
+}
+""".strip()
+
 class CompanionScreenshotError(RuntimeError):
     """Base exception for Companion screenshot failures."""
 
@@ -139,7 +226,7 @@ class CompanionTargetError(CompanionScreenshotError, ValueError):
 
 @dataclass(frozen=True, slots=True)
 class CompanionTarget:
-    kind: Literal["news", "news_latest", "planet", "station"]
+    kind: Literal["news", "news_latest", "planet", "station", "homepage"]
     value: str
     url: str
     label: str
@@ -160,6 +247,9 @@ TranslationCallback = Callable[
 class CompanionTranslationResult:
     translations: dict[str, str]
     cacheable: bool = True
+    complete: bool = True
+    untranslated_count: int = 0
+    rate_limited: bool = False
 
 
 def _fragment_from_value(value: str) -> str | None:
@@ -227,6 +317,19 @@ def companion_dss_target() -> CompanionTarget:
         label="Helldivers Companion 民主空间站",
         viewport=(1280, 900),
         clip=(209, 82, 862, 734),
+    )
+
+
+def companion_homepage_target() -> CompanionTarget:
+    # Companion 首页是 overflow:hidden 的应用外壳，设计宽度 1920px；
+    # 视口窄于 1920 时主面板会响应式压缩（planets-list 1680→1000），故用设计宽度截全屏。
+    return CompanionTarget(
+        kind="homepage",
+        value="home",
+        url=COMPANION_ORIGIN,
+        label="Helldivers Companion 首页",
+        viewport=(1920, 1080),
+        clip=(0, 0, 1920, 1080),
     )
 
 
@@ -475,6 +578,9 @@ class CompanionPlaywrightClient:
         max_pixels: int = 20_000_000,
         concurrency: int = 2,
         translate_callback: TranslationCallback | None = None,
+        page_load_timeout: float = 20.0,
+        translation_timeout: float = 20.0,
+        show_inactive: bool = False,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -484,6 +590,11 @@ class CompanionPlaywrightClient:
         self.max_bytes = max(1024, int(max_bytes))
         self.max_pixels = max(1_000_000, int(max_pixels))
         self.translate_callback = translate_callback
+        self.page_load_timeout = max(5.0, min(120.0, float(page_load_timeout)))
+        # Free-tier models often need 40–90s for large pages (planet/homepage).
+        # Keep a hard ceiling, but raise it so partial Chinese is not cut off early.
+        self.translation_timeout = max(5.0, min(120.0, float(translation_timeout)))
+        self.show_inactive = bool(show_inactive)
         self._cache_namespace = "source"
         self._playwright = None
         self._browser = None
@@ -491,6 +602,12 @@ class CompanionPlaywrightClient:
         self._semaphore = asyncio.Semaphore(max(1, min(4, int(concurrency))))
         self._locks: dict[str, asyncio.Lock] = {}
         self._lock_refs: dict[str, int] = {}
+        self._translation_tasks: set[
+            asyncio.Task[CompanionTranslationResult]
+        ] = set()
+        # Tracks which page kinds were last served from a stale cache, so
+        # command handlers can annotate the message ("翻译快照").
+        self._served_stale: set[str] = set()
 
     def set_translate_callback(
         self,
@@ -505,6 +622,32 @@ class CompanionPlaywrightClient:
         fingerprint = str(cache_namespace or "translated")
         digest = hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:10]
         self._cache_namespace = f"translated_{digest}"
+
+    def _finish_translation_task(
+        self,
+        task: asyncio.Task[CompanionTranslationResult],
+    ) -> None:
+        self._translation_tasks.discard(task)
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except Exception as exc:
+            logger.warning(
+                "[HD2] Companion 后台翻译失败: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+
+    def _cache_key(self, target: CompanionTarget) -> str:
+        """Cache file basename that also varies by show_inactive state.
+
+        Otherwise enabling the toggle still serves the stale 6-card screenshot
+        because both states share ``companion_homepage_home.png``.
+        """
+
+        suffix = "_inactive" if self.show_inactive else ""
+        return f"{target.cache_name}{suffix}"
 
     async def start(self) -> None:
         if self._browser is not None and self._browser.is_connected():
@@ -536,6 +679,12 @@ class CompanionPlaywrightClient:
             self._browser = browser
 
     async def close(self) -> None:
+        translation_tasks = list(self._translation_tasks)
+        self._translation_tasks.clear()
+        for task in translation_tasks:
+            task.cancel()
+        if translation_tasks:
+            await asyncio.gather(*translation_tasks, return_exceptions=True)
         browser = self._browser
         playwright = self._playwright
         self._browser = None
@@ -547,8 +696,11 @@ class CompanionPlaywrightClient:
 
     async def capture(self, target: CompanionTarget, *, force: bool = False) -> Path:
         output = self.output_dir / (
-            f"playwright_v9_{self._cache_namespace}_{target.cache_name}"
+            f"playwright_v9_{self._cache_namespace}_{self._cache_key(target)}"
         )
+        # Reset stale-tracking at the start of each capture call; it is set
+        # to True inside _capture_uncached when a stale cache is served.
+        self._served_stale.discard(target.kind)
         if not force and self._cache_is_fresh(output):
             return output
         try:
@@ -567,7 +719,7 @@ class CompanionPlaywrightClient:
         force: bool,
     ) -> Path:
         await self.start()
-        key = target.cache_name
+        key = self._cache_key(target)
         lock = self._locks.setdefault(key, asyncio.Lock())
         self._lock_refs[key] = self._lock_refs.get(key, 0) + 1
         try:
@@ -614,30 +766,78 @@ class CompanionPlaywrightClient:
             await page.goto(
                 target.url,
                 wait_until="commit",
-                timeout=min(30_000, self.timeout * 1000),
+                timeout=min(15_000, self.timeout * 1000),
             )
             try:
+                load_timeout = min(
+                    int(self.page_load_timeout * 1000),
+                    max(5_000, (self.timeout - 15) * 1000),
+                )
                 await page.wait_for_function(
                     """
                     ({ kind, expected }) => {
                       const text = (document.body?.innerText || "").toUpperCase();
-                      if (text.length <= 200 ||
-                          text.includes("PLEASE WAIT DEMOCRATICALLY")) {
+
+                      // Detect loading overlays by checking for visible
+                      // full-screen overlay/spinner elements.  We must NOT
+                      // match text substrings like "RELOADING" that appear
+                      // in normal content, so we rely on element-based checks.
+                      // NOTE: .pulse_station is a PERMANENT decorative element
+                      // on the DSS page, NOT a loading spinner — do not treat
+                      // it as a loading indicator.
+                      const overlays = document.querySelectorAll(
+                        ".backdrop.pulse-2, [class*='splash'], [class*='Splash']"
+                      );
+                      for (const el of overlays) {
+                        const s = getComputedStyle(el);
+                        if (s.display === "none" || s.visibility === "hidden") continue;
+                        const r = el.getBoundingClientRect();
+                        if (r.width > 200 && r.height > 200) {
+                          return false;
+                        }
+                      }
+
+                      if (text.length <= 200) {
                         return false;
                       }
                       if (kind === "news_latest") {
-                        return text.includes("REVIEW MESSAGE FROM SUPER EARTH") &&
-                               text.includes("PROVIDED BY THE MINISTRY OF TRUTH");
+                        // Require a relative-time marker (JUST NOW / … AGO)
+                        // to prove the actual news feed rendered, not just
+                        // the chrome (header/footer/menus) which can exceed
+                        // 200 chars on its own.
+                        return /(?:JUST NOW|MINUTES? AGO|HOURS? AGO|DAYS? AGO|TODAY|YESTERDAY)/i.test(text);
                       }
                       if (kind === "news") {
                         return text.includes(`ID ${expected}`) ||
                                (text.includes("STROHMANN") && text.includes("NEWS"));
                       }
                       if (kind === "station") {
+                        // Require ALL three DSS tactical action names to be
+                        // present — they only render after the DSS data API
+                        // returns.  A bare .noselect.inner container can
+                        // exist before data loads, so don't accept it alone.
                         return text.includes("NEXT FTL JUMP") &&
-                               (text.includes("ORBITAL BLOCKADE") ||
-                                text.includes("EAGLE STORM") ||
-                                text.includes("HEAVY ORDNANCE DISTRIBUTION"));
+                               text.includes("ORBITAL BLOCKADE") &&
+                               text.includes("EAGLE STORM");
+                      }
+                      if (kind === "homepage") {
+                        // Reject the settings page — the show-inactive
+                        // toggle navigates there and may not return cleanly
+                        // on slow servers.
+                        if (window.location.hash.toLowerCase().includes("settings")) {
+                          return false;
+                        }
+                        // The homepage must show campaign data (a planets-list
+                        // with children), not just the app shell or an SVG icon.
+                        return document.querySelector(".planets-list > *") !== null ||
+                               document.querySelector(
+                                 "[class*='campaign'], [class*='Campaign']"
+                               ) !== null;
+                      }
+                      if (kind === "planet") {
+                        return document.querySelector(
+                          ".entire_page, .page_wrapper, [class*='planet'], [class*='Planet']"
+                        ) !== null || text.includes(expected);
                       }
                       return text.includes(expected);
                     }
@@ -646,16 +846,113 @@ class CompanionPlaywrightClient:
                         "kind": target.kind,
                         "expected": target.value.replace("_", " ").upper(),
                     },
-                    timeout=self.timeout * 1000,
+                    timeout=load_timeout,
                 )
             except Exception as exc:
-                details = "; ".join(failed_requests[-5:])
+                relevant_failures = [
+                    item
+                    for item in failed_requests
+                    if "google-analytics.com" not in item
+                ]
+                details = "; ".join(relevant_failures[-5:])
                 suffix = f"；失败请求：{details}" if details else ""
-                raise CompanionScreenshotError(
-                    f"Companion 页面数据加载超时{suffix}"
-                ) from exc
+                body_text = await page.evaluate(
+                    "() => (document.body?.innerText || '').trim()"
+                )
+                body_length = len(body_text)
+                # Check if any loading overlay is still visible (element-based,
+                # NOT text-based — "LOADING"/"WAIT" appear in normal content).
+                # NOTE: pulse_station is permanent on DSS, not a loading spinner.
+                splash_info = await page.evaluate(
+                    """
+                    () => {
+                      const overlays = document.querySelectorAll(
+                        ".backdrop.pulse-2, [class*='splash'], [class*='Splash']"
+                      );
+                      for (const el of overlays) {
+                        const s = getComputedStyle(el);
+                        if (s.display === "none" || s.visibility === "hidden") continue;
+                        const r = el.getBoundingClientRect();
+                        if (r.width > 200 && r.height > 200) return true;
+                      }
+                      return false;
+                    }
+                    """
+                )
+                if splash_info:
+                    # Try waiting an extra 10s for the page to finish loading.
+                    logger.warning(
+                        "[HD2] Companion %s 仍在加载（加载指示器未消失），额外等待 10s",
+                        target.kind,
+                    )
+                    try:
+                        await page.wait_for_function(
+                            """
+                            () => {
+                              const overlays = document.querySelectorAll(
+                                ".backdrop.pulse-2, [class*='splash'], [class*='Splash']"
+                              );
+                              for (const el of overlays) {
+                                const s = getComputedStyle(el);
+                                if (s.display === "none" || s.visibility === "hidden") continue;
+                                const r = el.getBoundingClientRect();
+                                if (r.width > 200 && r.height > 200) return false;
+                              }
+                              return true;
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+                    except Exception:
+                        # Still loading after extra wait — stale cache or
+                        # raise, depending on kind.
+                        if self._cache_is_stale(output):
+                            self._served_stale.add(target.kind)
+                            logger.info(
+                                "[HD2] Companion %s 页面加载超时，返回上次缓存截图（stale）",
+                                target.kind,
+                            )
+                            return output
+                        raise CompanionScreenshotError(
+                            f"Companion 页面加载超时（加载指示器未消失）{suffix}"
+                        ) from exc
+                elif target.kind == "news_latest":
+                    if body_length < 80:
+                        if self._cache_is_stale(output):
+                            self._served_stale.add(target.kind)
+                            logger.info(
+                                "[HD2] Companion 新闻页内容为空，返回上次缓存截图（stale）"
+                            )
+                            return output
+                        raise CompanionScreenshotError(
+                            f"Companion 新闻页内容为空（body_length={body_length}）"
+                        ) from exc
+                    logger.warning(
+                        "[HD2] Companion 新闻页未在 %s 秒内完成，继续截取当前页面 body_length=%s%s",
+                        load_timeout / 1000,
+                        body_length,
+                        suffix,
+                    )
+                else:
+                    raise CompanionScreenshotError(
+                        f"Companion 页面数据加载超时（body_length={body_length}）{suffix}"
+                    ) from exc
+            if self.show_inactive and target.kind == "homepage":
+                # Toggle "Inactive Campaigns" to Shown so the homepage lists more
+                # campaign cards (~+1.5s). Best-effort: never block the screenshot.
+                logger.info("[HD2] Companion show-inactive 切换开始")
+                try:
+                    ok = await asyncio.wait_for(
+                        page.evaluate(_COMPANION_SHOW_INACTIVE_SCRIPT),
+                        timeout=min(10.0, max(3.0, self.timeout / 4)),
+                    )
+                    logger.info(
+                        "[HD2] Companion show-inactive 切换完成 ok=%s", bool(ok)
+                    )
+                except Exception as exc:  # noqa: BLE001 - best-effort toggle
+                    logger.warning("[HD2] Companion show-inactive 切换失败，跳过：%s", exc)
             await page.add_script_tag(content=_CLEANUP_SCRIPT)
-            await page.wait_for_timeout(self.wait_ms)
+            await page.wait_for_timeout(min(self.wait_ms, 5_000))
             translations_source = await page.evaluate(
                 _PREPARE_CAPTURE_SCRIPT,
                 {
@@ -676,14 +973,101 @@ class CompanionPlaywrightClient:
                     for value in translations_source
                     if isinstance(value, str) and value.strip()
                 ]
-                outcome = await self.translate_callback(target, source_texts)
-                cacheable = outcome.cacheable
-                if outcome.translations:
-                    await page.evaluate(
-                        _APPLY_TRANSLATIONS_SCRIPT,
-                        outcome.translations,
+                # Translation is an enhancement, not a reason to lose the
+                # screenshot. A slow cloud-hosted provider must not consume the
+                # whole browser capture timeout.
+                translation_timeout = min(
+                    self.translation_timeout,
+                    max(5.0, self.timeout / 2),
+                )
+                translation_task = asyncio.create_task(
+                    self.translate_callback(target, source_texts),
+                    name=f"hd2-companion-translate-{target.kind}",
+                )
+                try:
+                    outcome = await asyncio.wait_for(
+                        asyncio.shield(translation_task),
+                        timeout=translation_timeout,
                     )
-                    await page.wait_for_timeout(500)
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "[HD2] Companion 翻译超过 %.1f 秒，保留英文继续截图；翻译将在后台写入缓存",
+                        translation_timeout,
+                    )
+                    self._translation_tasks.add(translation_task)
+                    translation_task.add_done_callback(
+                        self._finish_translation_task
+                    )
+                    outcome = None
+                except BaseException:
+                    translation_task.cancel()
+                    await asyncio.gather(translation_task, return_exceptions=True)
+                    raise
+                if outcome is not None:
+                    cacheable = outcome.cacheable
+                    if (
+                        not outcome.translations
+                        and outcome.untranslated_count > 0
+                    ):
+                        # Stale-while-revalidate: if we have a previous
+                        # translated screenshot on disk, serve it instead
+                        # of a fresh English/partial page.
+                        if self._cache_is_stale(output):
+                            self._served_stale.add(target.kind)
+                            logger.info(
+                                "[HD2] Companion %s 翻译未完成，返回上次缓存截图（stale）",
+                                target.kind,
+                            )
+                            return output
+                        # No stale cache: take the screenshot with whatever
+                        # (zero) translations we have.  Never raise — the
+                        # user always gets a screenshot.
+                        logger.warning(
+                            "[HD2] Companion %s 未获得中文译文且无缓存，保留原网页截图",
+                            target.kind,
+                        )
+                        cacheable = False
+                    if outcome.translations:
+                        await page.evaluate(
+                            _APPLY_TRANSLATIONS_SCRIPT,
+                            outcome.translations,
+                        )
+                        await page.wait_for_timeout(500)
+                    if not outcome.complete:
+                        # Incomplete translation: prefer stale cache, but if
+                        # none exists, still screenshot what we have (partial
+                        # Chinese + remaining English).  Never raise.
+                        if self._cache_is_stale(output):
+                            self._served_stale.add(target.kind)
+                            logger.info(
+                                "[HD2] Companion %s 翻译不完整，返回上次缓存截图（stale）",
+                                target.kind,
+                            )
+                            return output
+                        logger.warning(
+                            "[HD2] Companion %s 翻译不完整（%d/%d），"
+                            "部分中文+部分英文继续截图",
+                            target.kind,
+                            len(outcome.translations),
+                            len(outcome.translations) + outcome.untranslated_count,
+                        )
+                        cacheable = False
+                else:
+                    # outcome is None: the foreground translation timed out at
+                    # the Playwright layer.  Prefer stale cache; otherwise take
+                    # the screenshot as-is.  Never raise.
+                    cacheable = False
+                    if self._cache_is_stale(output):
+                        self._served_stale.add(target.kind)
+                        logger.info(
+                            "[HD2] Companion %s 翻译前台超时，返回上次缓存截图（stale）",
+                            target.kind,
+                        )
+                        return output
+                    logger.warning(
+                        "[HD2] Companion %s 翻译前台超时且无缓存，保留英文继续截图（不写入主缓存）",
+                        target.kind,
+                    )
 
             if target.kind in {"news_latest", "station"}:
                 await page.locator('[data-hd2-capture-root="true"]').screenshot(
@@ -735,6 +1119,31 @@ class CompanionPlaywrightClient:
         except OSError:
             return False
 
+    def _cache_is_stale(self, path: Path, *, max_age: int = 7_200) -> bool:
+        """Whether *path* is an expired but still-usable cached screenshot.
+
+        Used for stale-while-revalidate: when a fresh capture fails because
+        the translation API is slow/rate-limited, serving a slightly-stale
+        translated screenshot is far better than degrading to a local card
+        or an untranslated English page.
+
+        The default window is 2 hours (7200 s): long enough to ride out a
+        transient translation-API outage, short enough that news content
+        doesn't go stale.  The background warmup loop refreshes the cache
+        every few minutes, so under normal operation the stale path is only
+        hit when the API is genuinely down.
+        """
+
+        try:
+            if not path.is_file():
+                return False
+            age = time.time() - path.stat().st_mtime
+            # Beyond cache_ttl (so not "fresh") but within max_age so the
+            # content is still recent enough to be useful.
+            return self.cache_ttl < age <= max_age
+        except OSError:
+            return False
+
     def _validate_image(self, path: Path) -> None:
         try:
             if path.stat().st_size > self.max_bytes:
@@ -771,6 +1180,7 @@ __all__ = [
     "build_browserless_endpoint",
     "build_browserless_payload",
     "companion_dss_target",
+    "companion_homepage_target",
     "companion_latest_news_target",
     "parse_companion_news_target",
     "parse_companion_planet_target",

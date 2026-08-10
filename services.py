@@ -57,6 +57,7 @@ from .stats_model import build_stats_view_model
 from .stats_renderer import StatsRenderer
 from .steam_parser import ParsedSteamContent, SteamBlock, parse_steam_content
 from .text_utils import clean_game_text
+from .glossary import preapply_glossary
 from .steam_renderer import SteamRenderer
 from .translator import TranslationCache, TranslationService
 from .war_state import WarState, normalize_faction, planet_index, planet_name
@@ -70,16 +71,11 @@ _COMPANION_STATIC_TRANSLATIONS = {
     "close": "关闭",
     "major order": "最高指令",
     "next ftl jump:": "下次超光速跃迁：",
-    "orbital blockade": "轨道封锁",
-    "eagle storm": "飞鹰风暴",
-    "heavy ordnance distribution": "重型军械分发",
     "estimated ready time:": "预计准备时间：",
     "available in:": "可用倒计时：",
     "defense campaigns cannot originate from this planet. the hellpod space optimization booster is automatically active for all missions.": "该星球不会触发防御战役；所有任务都会自动启用“地狱舱空间优化”强化。",
     "deploys periodic eagle airstrikes during missions. slows enemy progress in defense campaigns.": "任务期间将定期发动飞鹰空袭，并延缓敌军在防御战役中的推进。",
     "gives access to the orbital 380mm he barrage stratagem during missions. accelerates progress in liberation campaigns.": "任务期间可调用“轨道 380 毫米高爆弹幕”战略配备，同时加快解放战役进度。",
-    "meissa": "梅莎",
-    "ymir sector": "尤弥尔星区",
     "planet statistics": "星球统计",
     "helldivers active": "在线绝地潜兵",
     "missions completed": "已完成任务",
@@ -92,6 +88,30 @@ _COMPANION_STATIC_TRANSLATIONS = {
     "death count": "阵亡数",
     "sector": "扇区",
 }
+
+_ENGLISH_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'-]*")
+_PRESERVED_ENGLISH_TOKENS = {
+    "api",
+    "dss",
+    "ftl",
+    "hd2",
+    "html",
+    "id",
+    "json",
+    "png",
+    "ui",
+    "url",
+    "utc",
+    "xp",
+}
+
+
+def _has_translatable_english(text: str) -> bool:
+    words = _ENGLISH_WORD_RE.findall(str(text or ""))
+    return any(
+        len(word) >= 4 and word.casefold() not in _PRESERVED_ENGLISH_TOKENS
+        for word in words
+    )
 
 
 class HelldiversService:
@@ -129,7 +149,6 @@ class HelldiversService:
         rotation_orders: int = 600,
         rotation_steam: int = 900,
         enable_translation: bool = True,
-        ui_language: str = "zh-CN",
         wiki_client: WikiClient | None = None,
         enable_wiki: bool = True,
         translate_wiki: bool = True,
@@ -150,6 +169,9 @@ class HelldiversService:
         remote_image_cache: RemoteImageCache | None = None,
         campaign_trends: CampaignTrendStore | None = None,
         dashboard_low_impact_threshold: int = 800,
+        drop_untranslated_content: bool = True,
+        companion_translation_batch_timeout: float = 9.0,
+        companion_translation_budget: float = 18.0,
     ) -> None:
         self.client = client
         self.cache = cache
@@ -165,7 +187,6 @@ class HelldiversService:
         self.rotation_orders = max(60, int(rotation_orders))
         self.rotation_steam = max(60, int(rotation_steam))
         self.enable_translation = enable_translation
-        self.ui_language = ui_language if ui_language == "zh-CN" else "zh-CN"
         self.wiki_client = wiki_client
         self.enable_wiki = enable_wiki
         self.translate_wiki = translate_wiki and enable_translation
@@ -190,10 +211,21 @@ class HelldiversService:
         self.dashboard_low_impact_threshold = max(
             0, int(dashboard_low_impact_threshold or 800)
         )
+        self.drop_untranslated_content = bool(drop_untranslated_content)
+        self.companion_translation_batch_timeout = max(
+            3.0, min(60.0, float(companion_translation_batch_timeout))
+        )
+        # Large pages can need multiple free-model rounds.  Cap high enough that
+        # a 60–90s budget from config is actually honored.
+        self.companion_translation_budget = max(
+            self.companion_translation_batch_timeout,
+            min(120.0, float(companion_translation_budget)),
+        )
 
         self._rotation_tasks: list[asyncio.Task] = []
         self._trend_task: asyncio.Task | None = None
         self._warmup_task: asyncio.Task | None = None
+        self._companion_translation_tasks: set[asyncio.Task] = set()
         self._register_fetchers()
 
     async def _render_card(self, card) -> Path | None:
@@ -279,6 +311,13 @@ class HelldiversService:
         if self._rotation_tasks:
             await asyncio.gather(*self._rotation_tasks, return_exceptions=True)
         self._rotation_tasks = []
+        companion_tasks = list(self._companion_translation_tasks)
+        for task in companion_tasks:
+            if not task.done():
+                task.cancel()
+        if companion_tasks:
+            await asyncio.gather(*companion_tasks, return_exceptions=True)
+        self._companion_translation_tasks.clear()
         await self.cache.stop()
         if self.wiki_client is not None:
             try:
@@ -546,8 +585,15 @@ class HelldiversService:
             and cached.get("original_text") == original
             and cached.get("translated_text")
         ):
+            cached_text = str(cached.get("translated_text") or original)
+            if (
+                cached_text == original
+                and self.drop_untranslated_content
+                and _has_translatable_english(original)
+            ):
+                return ""
             return self._restore_dispatch_planets(
-                cached["translated_text"], replacements
+                cached_text, replacements
             )
 
         translated = await self.translator.translate_text(original)
@@ -571,6 +617,8 @@ class HelldiversService:
             item_id,
             original,
             original,
+            success=False,
+            fallback_reason="unchanged",
             metadata={
                 "published": item.get("published"),
                 "type": item.get("type"),
@@ -578,6 +626,13 @@ class HelldiversService:
                 "fallback": True,
             },
         )
+        if self.drop_untranslated_content and _has_translatable_english(original):
+            logger.warning(
+                "[HD2] 丢弃未翻译快讯 item=%s text=%r",
+                item_id,
+                original[:80],
+            )
+            return ""
         return self._restore_dispatch_planets(original, replacements)
 
     async def _dispatch_planet_placeholders(
@@ -713,72 +768,22 @@ class HelldiversService:
             await asyncio.sleep(0.1)
 
     async def _translate_steam(self, update: dict[str, Any]) -> dict[str, str]:
-        item_id = str(update.get("id", ""))
+        item_id = str(update.get("id", "") or "steam")
         original_title = update.get("title", "") or ""
         original_content = update.get("content", "") or ""
-        original_text = (
-            f"{original_title}\n{original_content}"
-            if original_title and original_content
-            else (original_title or original_content)
-        )
         result = {"title": original_title, "content": original_content}
 
-        if not self.enable_translation or not item_id:
+        if not self.enable_translation:
             return result
 
-        cached = await self.translation_cache.get("steam", item_id)
-        if (
-            cached
-            and cached.get("original_text") == original_text
-            and cached.get("metadata")
-        ):
-            meta = cached["metadata"]
-            result["title"] = meta.get("translated_title") or original_title
-            result["content"] = meta.get("translated_content") or original_content
-            return result
-
-        translated_title = (
-            await self.translator.translate_text(original_title)
-            if original_title
-            else ""
-        )
-        translated_content = (
-            await self.translator.translate_text(original_content)
-            if original_content
-            else ""
-        )
-        final_title = (
-            translated_title
-            if translated_title and translated_title != original_title
-            else original_title
-        )
-        final_content = (
-            translated_content
-            if translated_content and translated_content != original_content
-            else original_content
-        )
-
-        await self.translation_cache.store(
-            "steam",
-            item_id,
-            original_text,
-            f"{final_title}\n{final_content}",
-            metadata={
-                "publishedAt": update.get("publishedAt"),
-                "author": update.get("author"),
-                "url": update.get("url"),
-                "translated_title": final_title
-                if final_title != original_title
-                else "",
-                "translated_content": final_content
-                if final_content != original_content
-                else "",
-                "original_title": original_title,
-                "original_content": original_content,
-            },
-        )
-        result["title"] = final_title
-        result["content"] = final_content
+        if original_title:
+            result["title"] = await self._translate_cached_text(
+                "steam_message", f"{item_id}:title", original_title
+            )
+        if original_content:
+            result["content"] = await self._translate_cached_text(
+                "steam_message", f"{item_id}:content", original_content
+            )
         return result
 
     async def _prepare_steam_content(
@@ -801,15 +806,19 @@ class HelldiversService:
                 translated_items: list[str] = []
                 for item_index, item in enumerate(source_items):
                     if remaining <= 0:
-                        translated_items.append(item)
+                        if not self.drop_untranslated_content:
+                            translated_items.append(item)
                         continue
                     translated = await self._translate_cached_text(
                         "steam_card",
                         f"{item_id}:block:{index}:item:{item_index}",
                         item[:remaining],
                     )
-                    translated_items.append(translated)
+                    if translated or not self.drop_untranslated_content:
+                        translated_items.append(translated)
                     remaining -= len(item)
+                if not translated_items and self.drop_untranslated_content:
+                    continue
                 translated_blocks.append(
                     SteamBlock(
                         "list",
@@ -820,13 +829,19 @@ class HelldiversService:
                 )
                 continue
             if remaining <= 0:
-                translated_blocks.append(block)
+                if not self.drop_untranslated_content:
+                    translated_blocks.append(block)
                 continue
             source_text = block.text[:remaining]
             translated_text = await self._translate_cached_text(
                 "steam_card", f"{item_id}:block:{index}", source_text
             )
             suffix = block.text[len(source_text) :]
+            if self.drop_untranslated_content and _has_translatable_english(suffix):
+                suffix = ""
+            if not translated_text and self.drop_untranslated_content:
+                remaining = max(0, remaining - len(source_text))
+                continue
             translated_blocks.append(
                 SteamBlock(
                     block.kind,
@@ -912,16 +927,34 @@ class HelldiversService:
             and cached.get("original_text") == extract
             and cached.get("translated_text")
         ):
-            return str(cached["translated_text"])
+            cached_text = str(cached["translated_text"])
+            if (
+                cached_text == extract
+                and self.drop_untranslated_content
+                and _has_translatable_english(extract)
+            ):
+                return ""
+            return cached_text
 
         translated = await self.translator.translate_text(extract)
-        final = translated if translated and translated != extract else extract
+        if translated and translated != extract:
+            await self.translation_cache.store(
+                "wiki",
+                item_id,
+                extract,
+                translated,
+                metadata={"title": title, "fallback": False},
+            )
+            return translated
+        final = "" if self.drop_untranslated_content and _has_translatable_english(extract) else extract
         await self.translation_cache.store(
             "wiki",
             item_id,
             extract,
-            final,
-            metadata={"title": title, "fallback": final == extract},
+            extract,
+            metadata={"title": title, "fallback": True},
+            success=False,
+            fallback_reason="unchanged",
         )
         return final
 
@@ -1029,18 +1062,57 @@ class HelldiversService:
         namespace: str,
         item_id: str,
         text: str,
+        *,
+        allow_source_fallback: bool = False,
     ) -> str:
         if not self.enable_translation or len(text.strip()) < 3:
             return text
+        # 预替换官方术语（星球/敌人/战备/星系），LLM 只需翻句式，术语不会跑偏。
+        preapplied = preapply_glossary(text)
+        if preapplied != text:
+            # 术语替换后若无剩余可翻译英文，直接当作译文，跳过 LLM 调用。
+            if not _has_translatable_english(preapplied):
+                return preapplied
+            text = preapplied
         digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
         cache_id = f"{item_id}:{digest}"
         cached = await self.translation_cache.get(namespace, cache_id)
         if cached and cached.get("original_text") == text:
-            return str(cached.get("translated_text") or text)
+            cached_text = str(cached.get("translated_text") or text)
+            if cached_text != text:
+                return cached_text
+            if (
+                allow_source_fallback
+                or not self.drop_untranslated_content
+                or not _has_translatable_english(text)
+            ):
+                return cached_text
+            return ""
         translated = await self.translator.translate_text(text)
-        final = translated if translated and translated != text else text
-        await self.translation_cache.store(namespace, cache_id, text, final)
-        return final
+        if translated and translated != text:
+            await self.translation_cache.store(namespace, cache_id, text, translated)
+            return translated
+        await self.translation_cache.store(
+            namespace,
+            cache_id,
+            text,
+            text,
+            success=False,
+            fallback_reason="unchanged",
+        )
+        if (
+            allow_source_fallback
+            or not self.drop_untranslated_content
+            or not _has_translatable_english(text)
+        ):
+            return text
+        logger.warning(
+            "[HD2] 丢弃未翻译文本 namespace=%s item=%s text=%r",
+            namespace,
+            item_id,
+            text[:80],
+        )
+        return ""
 
     async def translate_companion_fragments(
         self,
@@ -1048,11 +1120,21 @@ class HelldiversService:
         texts: list[str],
     ) -> CompanionTranslationResult:
         """Translate visible Companion DOM fragments before Playwright capture."""
-        unique = list(dict.fromkeys(text for text in texts if text.strip()))[:96]
+        all_unique = list(dict.fromkeys(text for text in texts if text.strip()))
         kind = str(getattr(target, "kind", "page"))
+        # No artificial fragment cap: the DOM extractor already caps at 96
+        # nodes, and every fragment deserves a chance to enter the disk
+        # translation cache so background warmup eventually translates the
+        # full page.  Capping here would permanently drop后排 fragments.
+        unique = all_unique
+        skipped_count = 0
         translations: dict[str, str] = {}
         pending: list[tuple[str, str]] = []
+        unresolved: list[tuple[str, str]] = []
+        cached_failures: list[tuple[str, str]] = []
         for source in unique:
+            if not _has_translatable_english(source):
+                continue
             normalized = " ".join(source.split()).casefold()
             static = _COMPANION_STATIC_TRANSLATIONS.get(normalized)
             if static:
@@ -1061,6 +1143,12 @@ class HelldiversService:
             official_planet = lookup_planet_name(source)
             if official_planet:
                 translations[source] = official_planet
+                continue
+            # 术语预替换：把已知的星球/敌人/战备/星系名直接换成官方中文。
+            preapplied = preapply_glossary(source)
+            if preapplied != source and not _has_translatable_english(preapplied):
+                # 整段都是已知术语，预替换即终态，无需 LLM。
+                translations[source] = preapplied
                 continue
             digest = hashlib.sha1(source.encode("utf-8")).hexdigest()[:12]
             cache_id = f"{kind}:{normalized[:80]}:{digest}"
@@ -1071,20 +1159,25 @@ class HelldiversService:
                 translated = str(cached.get("translated_text") or source)
                 if translated != source:
                     translations[source] = translated
+                else:
+                    cached_failures.append((source, cache_id))
                 continue
             pending.append((source, cache_id))
 
-        provider_translation_succeeded = False
-        if pending:
-            translated_values = await self.translator.translate_texts(
-                [source for source, _ in pending]
-            )
+        async def translate_pending(items: list[tuple[str, str]]) -> list[tuple[str, str]]:
+            failed: list[tuple[str, str]] = []
+            if not items:
+                return failed
+            # 送 LLM 前先做术语预替换，让模型看到的是半中文文本。
+            payload = [preapply_glossary(source) for source, _ in items]
+            translated_values = await self.translator.translate_texts(payload)
+            if len(translated_values) < len(items):
+                failed.extend(items[len(translated_values) :])
             for (source, cache_id), translated in zip(
-                pending, translated_values, strict=False
+                items, translated_values, strict=False
             ):
                 final = translated if translated and translated != source else source
                 if final != source:
-                    provider_translation_succeeded = True
                     await self.translation_cache.store(
                         "companion_page_v3",
                         cache_id,
@@ -1092,9 +1185,158 @@ class HelldiversService:
                         final,
                     )
                     translations[source] = final
+                elif _has_translatable_english(source):
+                    failed.append((source, cache_id))
+            return failed
+
+        # Translate all batches in parallel within a fixed foreground budget.
+        # A single slow or rate-limited chunk no longer abandons later chunks;
+        # every chunk that finishes in time contributes its translations, and
+        # chunks still running when the budget expires keep going in the
+        # background (their results are written to the disk translation cache,
+        # so the next request benefits from them).
+        if pending:
+            batch_timeout = max(
+                3.0,
+                min(
+                    30.0,
+                    float(
+                        getattr(
+                            self,
+                            "companion_translation_batch_timeout",
+                            9.0,
+                        )
+                    ),
+                ),
+            )
+            translation_budget = max(
+                batch_timeout,
+                min(
+                    45.0,
+                    float(
+                        getattr(self, "companion_translation_budget", 18.0)
+                    ),
+                ),
+            )
+            # Split into chunks and launch concurrently.  Larger batches mean
+            # fewer API calls under the translator's concurrency limit:
+            # 16 items/batch → 96 fragments needs only 6 calls instead of 12.
+            batch_size = 16
+            chunks: list[list[tuple[str, str]]] = [
+                pending[start : start + batch_size]
+                for start in range(0, len(pending), batch_size)
+            ]
+            batch_tasks: list[asyncio.Task] = [
+                asyncio.create_task(
+                    translate_pending(chunk),
+                    name=f"hd2-companion-batch-{kind}-{i * batch_size}",
+                )
+                for i, chunk in enumerate(chunks)
+            ]
+
+            async def _gather_batches() -> None:
+                """Collect per-chunk failures as each batch resolves."""
+                results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                for result in results:
+                    if isinstance(result, BaseException):
+                        # Unexpected error inside translate_pending: treat the
+                        # whole chunk as unresolved so the screenshot keeps the
+                        # original English for those fragments.
+                        logger.warning(
+                            "[HD2] Companion %s 翻译批次异常: %s",
+                            kind,
+                            result,
+                        )
+                        continue
+                    unresolved.extend(result)
+
+            gather_task = asyncio.create_task(
+                _gather_batches(), name=f"hd2-companion-gather-{kind}"
+            )
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(gather_task),
+                    timeout=translation_budget,
+                )
+            except asyncio.TimeoutError:
+                # Budget exhausted: move still-running batch tasks to the
+                # background set so they survive and populate the cache, then
+                # treat any not-yet-collected fragments as unresolved.
+                logger.warning(
+                    "[HD2] Companion %s 翻译预算 %.1fs 到期，已完成的批次生效，"
+                    "剩余批次转入后台继续写入缓存",
+                    kind,
+                    translation_budget,
+                )
+                gather_task.cancel()
+                # Cancel only the gather wrapper; the underlying batch_tasks
+                # were created with asyncio.shield semantics in spirit (they
+                # are independent tasks) so they keep running.  Collect them
+                # into the background set and register a completion callback.
+                background_tasks = getattr(
+                    self, "_companion_translation_tasks", None
+                )
+                if background_tasks is None:
+                    background_tasks = set()
+                    self._companion_translation_tasks = background_tasks
+
+                def finish_background_batch(
+                    completed: asyncio.Task,
+                    *,
+                    task_set: set[asyncio.Task] = background_tasks,
+                    page_kind: str = kind,
+                ) -> None:
+                    task_set.discard(completed)
+                    if completed.cancelled():
+                        return
+                    try:
+                        failed = completed.result()
+                    except Exception as exc:  # noqa: BLE001 - task boundary
+                        logger.warning(
+                            "[HD2] Companion %s 后台翻译批次失败: %s",
+                            page_kind,
+                            exc,
+                        )
+                        return
+                    logger.info(
+                        "[HD2] Companion %s 后台翻译批次完成 unresolved=%s",
+                        page_kind,
+                        len(failed),
+                    )
+
+                for bt in batch_tasks:
+                    if not bt.done():
+                        background_tasks.add(bt)
+                        bt.add_done_callback(finish_background_batch)
+
+                # Rebuild the unresolved list from scratch to avoid
+                # double-counting: _gather_batches may have already added
+                # failed items from completed batches.  Take the union of
+                # (a) items already in unresolved and (b) items not yet
+                # translated, deduplicated by source text.
+                resolved_sources = set(translations.keys())
+                unresolved_set: set[str] = {src for src, _ in unresolved}
+                for src, cid in pending:
+                    if src not in resolved_sources and src not in unresolved_set:
+                        unresolved.append((src, cid))
+                        unresolved_set.add(src)
+
+        untranslated_count = len(cached_failures) + len(unresolved) + skipped_count
+        # Distinguish "translation API is rate-limiting us" (transient) from
+        # "some fragments genuinely have no translation" (persistent): the caller
+        # can surface a clearer "翻译繁忙" message instead of a generic failure.
+        cooldown_checker = getattr(self.translator, "in_cooldown", None)
+        rate_limited = bool(
+            untranslated_count > 0
+            and callable(cooldown_checker)
+            and cooldown_checker()
+        )
         return CompanionTranslationResult(
             translations=translations,
-            cacheable=not pending or provider_translation_succeeded,
+            cacheable=untranslated_count == 0,
+            complete=untranslated_count == 0,
+            untranslated_count=untranslated_count,
+            rate_limited=rate_limited,
         )
 
     async def _localize_planet_name(
@@ -1496,6 +1738,12 @@ class HelldiversService:
                     event[display_field] = await self._translate_cached_text(
                         "global_event", f"{item_id}:{field}", cleaned
                     )
+                    if (
+                        not event[display_field]
+                        and self.drop_untranslated_content
+                        and _has_translatable_english(cleaned)
+                    ):
+                        event[field] = ""
             prepared.append(event)
         return prepared
 
@@ -1567,8 +1815,10 @@ class HelldiversService:
                         ):
                             text = container.get(field)
                             if isinstance(text, str) and len(text.strip()) >= 3:
-                                container[field] = await self.translator.translate_text(
-                                    text
+                                container[field] = await self._translate_cached_text(
+                                    "personal_order",
+                                    field,
+                                    text,
                                 )
             return format_personal_order_message(data)
         except Exception as e:
@@ -1603,8 +1853,10 @@ class HelldiversService:
                         ):
                             text = container.get(field)
                             if isinstance(text, str) and len(text.strip()) >= 3:
-                                container[field] = await self.translator.translate_text(
-                                    text
+                                container[field] = await self._translate_cached_text(
+                                    "personal_order",
+                                    field,
+                                    text,
                                 )
             card = build_personal_order_card(data)
             p = await self._render_card(card)

@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from astrbot.api import logger
+
 from .text_utils import (
     clean_game_text,
     dispatch_type_name,
@@ -92,6 +94,7 @@ def format_stats_message(
         ]
         return "\n".join(lines)
     except Exception:
+        logger.exception("[HD2] 格式化失败")
         return "❌ 数据格式化失败，请稍后重试。"
 
 
@@ -166,6 +169,7 @@ def format_order_message(
         lines.append("执行命令，为了超级地球！🌍")
         return "\n".join(lines)
     except Exception:
+        logger.exception("[HD2] 格式化失败")
         return "❌ 数据格式化失败，请稍后重试。"
 
 
@@ -197,6 +201,7 @@ def format_news_message(
         ]
         return "\n".join(lines)
     except Exception:
+        logger.exception("[HD2] 格式化失败")
         return "❌ 数据格式化失败，请稍后重试。"
 
 
@@ -331,6 +336,7 @@ def format_steam_message(
         ]
         return "\n".join(lines)
     except Exception:
+        logger.exception("[HD2] 格式化失败")
         return "❌ 数据格式化失败，请稍后重试。"
 
 
@@ -356,6 +362,7 @@ def format_wiki_summary(
         ]
         return "\n".join(lines)
     except Exception:
+        logger.exception("[HD2] Wiki 摘要格式化失败")
         return "❌ Wiki 摘要格式化失败，请稍后重试。"
 
 
@@ -398,6 +405,7 @@ def format_wiki_search_results(
             lines.append(f"网页搜索: {search_url}")
         return "\n".join(lines)
     except Exception:
+        logger.exception("[HD2] Wiki 搜索结果格式化失败")
         return "❌ Wiki 搜索结果格式化失败，请稍后重试。"
 
 
@@ -446,6 +454,7 @@ def format_dss_message(station: dict[str, Any] | None) -> str:
         lines.append("为了超级地球！🌍")
         return "\n".join(lines)
     except Exception:
+        logger.exception("[HD2] DSS 数据格式化失败")
         return "❌ DSS 数据格式化失败，请稍后重试。"
 
 
@@ -512,6 +521,7 @@ def format_planet_message(planet: dict[str, Any]) -> str:
         lines.append("-------------")
         return "\n".join(lines)
     except Exception:
+        logger.exception("[HD2] 星球数据格式化失败")
         return "❌ 星球数据格式化失败，请稍后重试。"
 
 
@@ -699,6 +709,7 @@ def format_personal_order_message(data: dict[str, Any] | list[Any] | None) -> st
         lines.append("-------------")
         return "\n".join(lines)
     except Exception:
+        logger.exception("[HD2] 个人任务格式化失败")
         return "❌ 个人任务格式化失败，请稍后重试。"
 
 

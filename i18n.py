@@ -9,6 +9,13 @@ from __future__ import annotations
 
 from typing import Final, Literal, Mapping, TypeAlias
 
+from .glossary import (
+    ENEMY_NAMES,
+    PLANET_NAMES as _PLANET_NAMES,
+    SECTOR_NAMES,
+    STRATAGEM_NAMES,
+)
+
 
 Locale: TypeAlias = Literal["zh-CN"]
 
@@ -438,52 +445,15 @@ _DSS_STATUS_KEYS: Final[dict[int, LabelKey]] = {
     3: "status.cooldown",
 }
 
-# Official Simplified Chinese planet names. Keep this separate from generic UI
-# labels so every renderer receives the same authoritative localization.
-_PLANET_NAMES: Final[dict[str, str]] = {
-    "super earth": "超级地球", "cyberstan": "赛博斯坦", "crimsica": "克里姆西卡",
-    "meridia": "默里迪亚", "malevelon creek": "马列维隆溪", "tian guan": "天关",
-    "heeth": "希斯", "angel's venture": "天使投资", "turing": "图灵",
-    "fenrir iii": "芬里尔三号", "bio-stan": "生化斯坦", "estinus": "埃斯蒂努斯",
-    "veld": "维尔德", "troost": "特鲁斯特", "manticore": "曼提柯尔",
-    "boreas": "玻瑞阿斯", "andromeda": "安德洛墨达", "hellmire": "赫尔迈尔",
-    "fori prime": "福里主星", "ingmar": "英格玛", "valgaard": "瓦尔加德",
-    "moradesh": "莫拉迪什", "erata prime": "厄拉塔主星", "charbal-vii": "查巴尔七号",
-    "prospector": "勘探者", "retros": "雷特罗斯", "oshaune": "奥肖恩",
-    "ubanea": "乌巴尼亚", "choohe": "丘赫", "azterra": "阿兹泰拉",
-    "arcturus prime": "大角星主星", "draco": "德拉科", "hydra": "海德拉",
-    "orion": "猎户座", "perseus": "英仙座", "theseus": "忒修斯",
-    "achilles": "阿喀琉斯", "aesir": "阿萨神域", "midgard": "米德加尔德",
-    "umlaut": "元音", "vernen wells": "弗嫩井", "solghast": "索尔加斯特",
-    "gacrux": "加克鲁克斯", "zegema paradise": "泽格马天堂", "new kiruna": "新基律纳",
-    "penta": "彭塔", "omicron": "奥密克戎", "klen dahal ii": "克莱恩·达哈尔二号",
-    "phact bay": "法克特湾", "acamar iv": "阿卡马尔四号", "alderrad": "阿尔德拉德",
-    "varylia 5": "瓦里利亚五号", "ivis": "伊维斯", "slief": "斯里夫",
-    "blistica": "布利斯蒂卡", "virgil vii": "维吉尔七号", "castor": "卡斯托尔",
-    "pollux": "波吕克斯", "menkent": "门肯特", "lesath": "莱萨特",
-    "ymir": "尤弥尔", "nibelheim": "尼贝尔海姆", "martale": "马尔塔莱",
-    "caph": "卡夫", "avil": "阿维尔", "sapius": "萨皮乌斯",
-    "draupnir": "德罗普尼尔", "merga iv": "梅尔加四号", "botany": "植物学",
-    "lastofe": "拉斯托夫", "diluvium": "迪卢维乌姆", "vandalon iv": "万达隆四号",
-    "rictus": "里克图斯", "septron": "塞普特隆", "effluvia": "埃弗卢维亚",
-    "monarch": "君主",
-    "wezen": "威森",
-    "gatria": "加特里亚",
-    "charon prime": "卡戎一号",
-    "vega bay": "织女海湾",
-    "mintoria": "明托里亚",
-    "matar bay": "马塔尔湾",
-    "aurora bay": "极光湾",
-    "heze bay": "赫西湾",
-    "new stockholm": "新斯德哥尔摩",
-    "grafmere": "格拉夫米尔",
-    "alamak vii": "阿拉马克七号",
-    "oasis": "绿洲",
-    "yed prior": "叶德·普赖尔",
-    "gaellivare": "盖利瓦雷",
-    "meissa": "梅莎",
-}
+# Official Simplified Chinese planet/enemy/sector/stratagem names now live in
+# ``assets/glossary/*.json`` and are loaded by :mod:`glossary`. The four tables
+# are re-exported here so existing call sites keep working.
+ENEMY_NAMES: Final[dict[str, str]] = ENEMY_NAMES
+SECTOR_NAMES: Final[dict[str, str]] = SECTOR_NAMES
+STRATAGEM_NAMES: Final[dict[str, str]] = STRATAGEM_NAMES
 
+# DSS tactical action names — keep as a small explicit alias so format_dss_action
+# and the icon-by-name mapping in services.py resolve consistently.
 _DSS_ACTION_NAMES: Final[dict[str, str]] = {
     "eagle storm": "飞鹰风暴",
     "orbital blockade": "轨道封锁",

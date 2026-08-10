@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from collections.abc import AsyncGenerator, Callable
 from functools import wraps
@@ -44,6 +45,7 @@ from .companion_screenshot import (
     CompanionTarget,
     CompanionTargetError,
     companion_dss_target,
+    companion_homepage_target,
     companion_latest_news_target,
     parse_companion_planet_target,
 )
@@ -83,6 +85,7 @@ Helldivers 2 银河战争 {version}
 /dss                Companion 民主空间站图文
 /global_events      全球事件
 /hd2news            Companion 最新新闻
+/companion          Companion 首页（截图+翻译）
 /warfront <阵营>    战线战况
 /planet <名称/编号> 星球详情
 /steam              Steam 新闻图片
@@ -112,11 +115,15 @@ HDHELP_TEXT = """\
 
 【Companion 网页截图】
 /hd2news
-  截取 Helldivers Companion 最新新闻，优先翻译网页文字；失败时回退中文新闻卡。
+  截取 Helldivers Companion 最新新闻，优先翻译网页文字；失败时提示重试。
+/companion
+  截取 Helldivers Companion 首页整屏，自动翻译可见英文文案。
 /dss
   截取民主空间站主面板并附中文摘要；文字摘要不重复输出战术行动。
 /planet <名称、编号、slug或链接>
   查询单个星球详情。支持中文名、英文名、编号、slug 和 Companion 星球链接。
+/hd2refresh 或 /刷新缓存
+  强制刷新 Companion 截图缓存，跳过缓存重新截图和翻译。
 
 【地图与战线】
 /map
@@ -134,9 +141,9 @@ HDHELP_TEXT = """\
 /银河快报 或 /galaxy_news
   手动获取最近一期 B站银河快报图文。
 /银河快报订阅
-  管理员在当前群订阅银河快报自动推送。
+  在当前群订阅银河快报自动推送。
 /银河快报退订
-  管理员取消当前群的银河快报推送。
+  取消当前群的银河快报推送。
 
 【帮助】
 /hd2 或 /help
@@ -204,6 +211,7 @@ class HelldiversPlugin(Star):
         self.companion_backend = "playwright"
         self.companion_playwright: CompanionPlaywrightClient | None = None
         self.companion_screenshots: CompanionScreenshotClient | None = None
+        self._companion_warmup_task: asyncio.Task | None = None
 
     def _cfg(self, key: str, default: Any = None) -> Any:
         if self.config is None:
@@ -251,7 +259,7 @@ class HelldiversPlugin(Star):
             try:
                 self.companion_playwright = CompanionPlaywrightClient(
                     data_dir / "companion_screenshots",
-                    timeout=int(self._cfg("companion_screenshot_timeout", 90) or 90),
+                    timeout=int(self._cfg("companion_screenshot_timeout", 60) or 60),
                     wait_ms=int(
                         self._cfg("companion_screenshot_wait_ms", 5000) or 5000
                     ),
@@ -267,6 +275,15 @@ class HelldiversPlugin(Star):
                     max_pixels=int(
                         self._cfg("companion_screenshot_max_pixels", 20_000_000)
                         or 20_000_000
+                    ),
+                    page_load_timeout=float(
+                        self._cfg("companion_page_load_timeout", 20.0) or 20.0
+                    ),
+                    translation_timeout=float(
+                        self._cfg("companion_translation_timeout", 60.0) or 60.0
+                    ),
+                    show_inactive=bool(
+                        self._cfg("companion_show_inactive", False)
                     ),
                 )
                 await self.companion_playwright.start()
@@ -285,7 +302,7 @@ class HelldiversPlugin(Star):
                         self._cfg("companion_browserless_proxy_url", "") or ""
                     ),
                     timeout=int(
-                        self._cfg("companion_screenshot_timeout", 90) or 90
+                        self._cfg("companion_screenshot_timeout", 60) or 60
                     ),
                     wait_ms=int(
                         self._cfg("companion_screenshot_wait_ms", 5000) or 5000
@@ -315,27 +332,22 @@ class HelldiversPlugin(Star):
             user_agent=str(
                 self._cfg("api_user_agent", USER_AGENT)
             ),
-            timeout=int(self._cfg("api_timeout", 30) or 30),
+            timeout=int(self._cfg("api_timeout", 20) or 20),
             proxy_url=str(self._cfg("proxy_url", "") or ""),
-            retry_base_delay=float(self._cfg("retry_base_delay", 5.0) or 5.0),
-            retry_max_delay=float(self._cfg("retry_max_delay", 45.0) or 45.0),
-            retry_max_attempts=int(self._cfg("retry_max_attempts", 3) or 3),
-            min_request_interval=float(self._cfg("min_request_interval", 1.5) or 1.5),
+            retry_base_delay=float(self._cfg("retry_base_delay", 3.0) or 3.0),
+            retry_max_delay=float(self._cfg("retry_max_delay", 15.0) or 15.0),
+            retry_max_attempts=int(self._cfg("retry_max_attempts", 2) or 2),
+            min_request_interval=float(self._cfg("min_request_interval", 3.0) or 3.0),
             steam_appid=int(self._cfg("steam_appid", 553850) or 553850),
             steam_news_count=int(self._cfg("steam_news_count", 10) or 10),
         )
 
         cache = CacheService(
             data_dir,
-            update_interval=int(self._cfg("cache_update_interval", 180) or 180),
-            request_delay=float(self._cfg("request_delay", 4) or 4),
+            update_interval=int(self._cfg("cache_update_interval", 300) or 300),
+            request_delay=float(self._cfg("request_delay", 6) or 6),
             enable_background=bool(self._cfg("enable_background_refresh", True)),
         )
-
-        ui_language = str(self._cfg("ui_language", "zh-CN") or "zh-CN")
-        if ui_language != "zh-CN":
-            logger.warning("[HD2] unsupported ui_language=%s; using zh-CN", ui_language)
-            ui_language = "zh-CN"
 
         enable_translation = bool(self._cfg("enable_translation", True))
         translator = TranslationService(
@@ -345,7 +357,7 @@ class HelldiversPlugin(Star):
                     "https://uapis.cn/api/v1/ai/translate",
                 )
             ),
-            timeout=int(self._cfg("translation_timeout", 30) or 30),
+            timeout=int(self._cfg("translation_timeout", 20) or 20),
             target_lang=str(self._cfg("translation_target_lang", "zh") or "zh"),
             user_agent=str(
                 self._cfg("api_user_agent", USER_AGENT)
@@ -355,8 +367,15 @@ class HelldiversPlugin(Star):
             mode=str(self._cfg("translation_mode", "auto") or "auto"),
             api_key=str(self._cfg("translation_api_key", "") or ""),
             model=str(self._cfg("translation_model", "gpt-4o-mini") or "gpt-4o-mini"),
+            stream=bool(self._cfg("translation_stream", False)),
             fallback_ttl=int(
-                self._cfg("translation_retry_fallback_seconds", 900) or 900
+                self._cfg("translation_retry_fallback_seconds", 180) or 180
+            ),
+            error_cooldown=int(
+                self._cfg("translation_error_cooldown_seconds", 120) or 120
+            ),
+            max_tokens=int(
+                self._cfg("translation_max_tokens", 1200) or 0
             ),
         )
         logger.info("[HD2] translation provider: %s", translator.diagnostic())
@@ -365,7 +384,7 @@ class HelldiversPlugin(Star):
             data_dir,
             provider_fingerprint=translator.provider_fingerprint(),
             fallback_ttl=int(
-                self._cfg("translation_retry_fallback_seconds", 900) or 900
+                self._cfg("translation_retry_fallback_seconds", 180) or 180
             ),
         )
 
@@ -428,7 +447,7 @@ class HelldiversPlugin(Star):
         )
         campaign_trends = CampaignTrendStore(
             data_dir / "campaign_history.json",
-            window_minutes=float(self._cfg("campaign_rate_window_minutes", 20) or 20),
+            window_minutes=max(1.0, float(self._cfg("campaign_rate_window_minutes", 20) or 20)),
             prune_hours=float(self._cfg("campaign_history_hours", 2) or 2),
         )
 
@@ -449,7 +468,6 @@ class HelldiversPlugin(Star):
             rotation_orders=int(self._cfg("rotation_orders", 600) or 600),
             rotation_steam=int(self._cfg("rotation_steam", 900) or 900),
             enable_translation=enable_translation,
-            ui_language=ui_language,
             wiki_client=wiki_client,
             enable_wiki=enable_wiki,
             translate_wiki=bool(self._cfg("translate_wiki", True)),
@@ -473,6 +491,15 @@ class HelldiversPlugin(Star):
             campaign_trends=campaign_trends,
             dashboard_low_impact_threshold=int(
                 self._cfg("dashboard_low_impact_threshold", 800) or 800
+            ),
+            drop_untranslated_content=bool(
+                self._cfg("drop_untranslated_content", True)
+            ),
+            companion_translation_batch_timeout=float(
+                self._cfg("companion_translation_batch_timeout", 20.0) or 20.0
+            ),
+            companion_translation_budget=float(
+                self._cfg("companion_translation_timeout", 60.0) or 60.0
             ),
         )
 
@@ -568,8 +595,86 @@ class HelldiversPlugin(Star):
                 "[HD2] 建议在插件配置中填写 api_contact（联系邮箱），以遵守 Helldivers API 礼仪"
             )
         logger.info(f"[HD2] plugin initialized {PLUGIN_VERSION}, data_dir={data_dir}")
+        self._start_companion_warmup()
+
+    def _start_companion_warmup(self) -> None:
+        """Launch the background Companion screenshot warmup loop.
+
+        The warmup loop periodically captures Companion pages (news, DSS, …)
+        in the background so that translation results are pre-populated in the
+        disk cache.  When a user actually runs ``/hd2news``, the screenshot is
+        already cached and returned instantly — the translation API latency is
+        absorbed in the background instead of blocking the user.
+        """
+
+        if self._companion_warmup_task is not None:
+            return
+        if self.companion_playwright is None:
+            return
+        if not bool(self._cfg("companion_warmup_enabled", True)):
+            return
+        self._companion_warmup_task = asyncio.create_task(
+            self._companion_warmup_loop(), name="hd2-companion-warmup"
+        )
+        logger.info("[HD2] Companion 截图后台预热已启动")
+
+    async def _companion_warmup_loop(self) -> None:
+        """Periodically pre-capture Companion pages in the background.
+
+        Each capture follows the exact same path as a user request (page load
+        → DOM text extraction → translate_callback → screenshot → cache file).
+        Translation is not time-pressured here: the foreground budget and
+        batch timeouts still apply, but failures are swallowed — the disk
+        translation cache gradually fills with fragments, and ``stale-while-
+        revalidate`` means a partially-warmed cache still serves a usable
+        screenshot on the next user request.
+        """
+
+        interval = max(60, int(self._cfg("companion_warmup_interval", 300) or 300))
+        kinds_raw = str(
+            self._cfg("companion_warmup_kinds", "news_latest,station")
+            or "news_latest,station"
+        ).strip()
+        kind_map = {
+            "news_latest": companion_latest_news_target,
+            "station": companion_dss_target,
+            "homepage": companion_homepage_target,
+        }
+        targets: list[CompanionTarget] = []
+        for token in kinds_raw.split(","):
+            kind = token.strip().casefold()
+            factory = kind_map.get(kind)
+            if factory is not None:
+                targets.append(factory())
+        if not targets:
+            return
+        # Give the rest of the plugin a moment to settle before the first run.
+        await asyncio.sleep(15)
+        while True:
+            for target in targets:
+                try:
+                    await self.companion_playwright.capture(target)  # type: ignore[union-attr]
+                    logger.info(
+                        "[HD2] Companion 预热完成: %s", target.kind
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - background warmup
+                    logger.debug(
+                        "[HD2] Companion 预热失败 %s: %s", target.kind, exc
+                    )
+                # Small spacing between captures to avoid bursting.
+                await asyncio.sleep(5)
+            await asyncio.sleep(interval)
 
     async def terminate(self) -> None:
+        if self._companion_warmup_task is not None:
+            self._companion_warmup_task.cancel()
+            try:
+                await self._companion_warmup_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._companion_warmup_task = None
         if self.bilibili_monitor is not None:
             try:
                 await self.bilibili_monitor.stop()
@@ -682,7 +787,6 @@ class HelldiversPlugin(Star):
             yield event.plain_result("❌ 获取银河快报失败，请查看 AstrBot 日志。")
 
     @filter.command("银河快报订阅", alias=["galaxy_news_subscribe"])
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     @_command_handler
     async def cmd_galaxy_news_subscribe(
@@ -692,6 +796,12 @@ class HelldiversPlugin(Star):
         if self.bilibili_monitor is None or not self.bilibili_auto_enabled:
             yield event.plain_result(
                 "❌ 银河快报监听未启用，请先在插件配置中开启。"
+            )
+            return
+        if not self.bilibili_monitor.has_login_cookie:
+            yield event.plain_result(
+                "❌ 银河快报监听缺少有效 B站登录 Cookie（必须包含 SESSDATA），"
+                "请在插件配置中填写后重载插件。"
             )
             return
         origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
@@ -704,7 +814,6 @@ class HelldiversPlugin(Star):
             yield event.plain_result("ℹ️ 本群已经订阅银河快报。")
 
     @filter.command("银河快报退订", alias=["galaxy_news_unsubscribe"])
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     @_command_handler
     async def cmd_galaxy_news_unsubscribe(
@@ -732,7 +841,9 @@ class HelldiversPlugin(Star):
         """Helldivers 2 插件全部指令说明"""
         yield event.plain_result(HDHELP_TEXT)
 
-    async def _capture_companion_page(self, target: CompanionTarget) -> Path:
+    async def _capture_companion_page(
+        self, target: CompanionTarget, *, force: bool = False
+    ) -> Path:
         if not self.companion_enabled:
             raise CompanionConfigurationError(
                 "Companion 网页截图尚未启用"
@@ -746,7 +857,7 @@ class HelldiversPlugin(Star):
                 raise CompanionConfigurationError(
                     "本地 Playwright 尚未启用，请检查容器中的 Chromium 和插件日志"
                 )
-            return await client.capture(target)
+            return await client.capture(target, force=force)
 
         client = self.companion_screenshots
         if client is None:
@@ -755,9 +866,28 @@ class HelldiversPlugin(Star):
             )
         if self._svc().enable_translation:
             raise CompanionConfigurationError(
-                "Browserless /screenshot 后端无法调用插件翻译器，已改用中文 Pillow 降级图"
+                "Browserless /screenshot 后端无法调用插件翻译器，无法生成中文 Companion 截图"
             )
-        return await client.capture(target)
+        return await client.capture(target, force=force)
+
+    def _served_companion_stale(self, kind: str) -> bool:
+        """Whether the last capture for *kind* served a stale cache."""
+        client = self.companion_playwright
+        if client is None:
+            return False
+        return kind in client._served_stale
+
+    def _stale_fallback_path(self, target: CompanionTarget) -> Path | None:
+        """Return a stale cached screenshot path if one exists, else None."""
+        client = self.companion_playwright
+        if client is None:
+            return None
+        output = client.output_dir / (
+            f"playwright_v9_{client._cache_namespace}_{client._cache_key(target)}"
+        )
+        if output.is_file():
+            return output
+        return None
 
     # ---- war cards (images) ----
 
@@ -794,29 +924,77 @@ class HelldiversPlugin(Star):
     @filter.command("hd2news")
     @_command_handler
     async def cmd_news(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
-        """截图 Companion 最新新闻；失败时回退本地新闻卡片。"""
+        """截图 Companion 最新新闻。"""
         target = companion_latest_news_target()
         try:
             path = await self._capture_companion_page(target)
-            yield event.chain_result(
-                [Image.fromFileSystem(str(path))]
-            )
+            components: list[Any] = []
+            if self._served_companion_stale(target.kind):
+                components.append(
+                    Plain("📰 翻译快照（内容稍旧），后台正在刷新，稍后重试可获取最新翻译。\n")
+                )
+            components.append(Image.fromFileSystem(str(path)))
+            yield event.chain_result(components)
             return
         except Exception as e:
-            logger.warning(f"[HD2] /hd2news Companion capture failed, fallback: {e}")
+            logger.exception(f"[HD2] /hd2news Companion capture failed: {e}")
+            try:
+                _, paths = await self._svc().get_news_image(1)
+            except Exception as fallback_error:
+                logger.warning(f"[HD2] /hd2news local fallback failed: {fallback_error}")
+                paths = []
+            if paths:
+                yield event.plain_result(
+                    "⚠️ Companion 翻译暂时繁忙，已为你展示基础新闻卡片，"
+                    "稍后重试可获取完整翻译截图。"
+                )
+                yield event.chain_result([Image.fromFileSystem(str(paths[0]))])
+            else:
+                yield event.plain_result("❌ Companion 最新新闻暂时不可用，请稍后重试。")
+            return
+
+    @filter.command("companion", alias={"首页", "companion_home"})
+    @_command_handler
+    async def cmd_companion(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
+        """截图 Helldivers Companion 首页并翻译。"""
+        target = companion_homepage_target()
         try:
-            err, paths = await self._svc().get_news_image(1)
+            path = await self._capture_companion_page(target)
+            yield event.chain_result([Image.fromFileSystem(str(path))])
+            return
         except Exception as e:
-            logger.exception(f"[HD2] /hd2news fallback error: {e}")
-            yield event.plain_result("❌ 获取游戏快讯失败，请稍后重试。")
+            logger.exception(f"[HD2] /companion Companion capture failed: {e}")
+            stale = self._stale_fallback_path(target)
+            if stale:
+                yield event.plain_result("⚠️ Companion 首页暂时加载失败，返回上次缓存截图。")
+                yield event.chain_result([Image.fromFileSystem(str(stale))])
+            else:
+                yield event.plain_result("❌ Companion 首页截图失败，请稍后重试。")
             return
-        if err:
-            yield event.plain_result(err)
+
+    @filter.command("hd2refresh", alias={"刷新缓存", "hd2clear"})
+    @_command_handler
+    async def cmd_refresh(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
+        """强制刷新 Companion 截图缓存（跳过缓存重新截图+翻译）。"""
+        if not self.companion_enabled or self.companion_backend != "playwright":
+            yield event.plain_result("❌ 当前未启用 Playwright Companion 截图，无需刷新。")
             return
-        async for r in self._yield_images(
-            event, paths, fallback="❌ 获取游戏快讯失败，请稍后重试。"
-        ):
-            yield r
+        targets = [
+            companion_latest_news_target(),
+            companion_dss_target(),
+        ]
+        if self.companion_playwright is not None:
+            targets.append(companion_homepage_target())
+        yield event.plain_result("🔄 正在强制刷新 Companion 截图缓存，请稍候…")
+        results: list[str] = []
+        for target in targets:
+            try:
+                await self._capture_companion_page(target, force=True)
+                results.append(f"✅ {target.label}")
+            except Exception as e:
+                logger.warning(f"[HD2] /hd2refresh {target.kind} failed: {e}")
+                results.append(f"❌ {target.label}（{e}）")
+        yield event.plain_result("Companion 缓存刷新完成：\n" + "\n".join(results))
 
     @filter.command("steam")
     @_command_handler
@@ -874,23 +1052,18 @@ class HelldiversPlugin(Star):
     @filter.command("dss", alias={"空间站", "民主空间站"})
     @_command_handler
     async def cmd_dss(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
-        """截图 Companion DSS 页面并附中文情报；失败时回退 Pillow。"""
+        """截图 Companion DSS 页面并附中文情报。"""
         target = companion_dss_target()
         try:
             path = await self._capture_companion_page(target)
         except Exception as e:
-            logger.warning(f"[HD2] /dss Companion capture failed, fallback: {e}")
-            try:
-                paths = await self._svc().get_dss_image()
-            except Exception as fallback_error:
-                logger.exception(f"[HD2] /dss fallback error: {fallback_error}")
-                yield event.plain_result("❌ 获取 DSS 信息失败，请稍后重试。")
+            logger.exception(f"[HD2] /dss Companion capture failed: {e}")
+            stale = self._stale_fallback_path(target)
+            if stale:
+                path = stale
+            else:
+                yield event.plain_result("❌ Companion DSS 截图失败，请稍后重试。")
                 return
-            async for r in self._yield_images(
-                event, paths, fallback="❌ 获取 DSS 信息失败，请稍后重试。"
-            ):
-                yield r
-            return
 
         try:
             message = await self._svc().get_dss_message()
@@ -959,7 +1132,7 @@ class HelldiversPlugin(Star):
     @filter.command("planet", alias={"星球"})
     @_command_handler
     async def cmd_planet(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
-        """截图 Companion 星球页；失败时回退 Pillow 星球卡片。"""
+        """截图 Companion 星球页。"""
         args = _strip_cmd(event.message_str or "", {"planet", "星球"})
         query = " ".join(args).strip()
         if not query:
@@ -1015,21 +1188,14 @@ class HelldiversPlugin(Star):
             )
             return
         except Exception as e:
-            logger.warning(f"[HD2] /planet Companion capture failed, fallback: {e}")
-
-        try:
-            err, paths = await self._svc().get_planet_image(fallback_query)
-        except Exception as e:
-            logger.exception(f"[HD2] /planet fallback error: {e}")
-            yield event.plain_result("❌ 获取星球信息失败，请稍后重试。")
+            logger.exception(f"[HD2] /planet Companion capture failed: {e}")
+            stale = self._stale_fallback_path(target)
+            if stale:
+                yield event.plain_result("⚠️ Companion 星球页暂时加载失败，返回上次缓存截图。")
+                yield event.chain_result([Image.fromFileSystem(str(stale))])
+            else:
+                yield event.plain_result("❌ Companion 星球截图失败，请稍后重试。")
             return
-        if err:
-            yield event.plain_result(err)
-            return
-        async for r in self._yield_images(
-            event, paths, fallback="❌ 获取星球信息失败，请稍后重试。"
-        ):
-            yield r
 
     @filter.command("map", alias={"地图"})
     @_command_handler

@@ -35,7 +35,10 @@ class TranslationService:
         mode: str = "builtin",
         api_key: str = "",
         model: str = "gpt-4o-mini",
+        stream: bool = False,
         fallback_ttl: int = 900,
+        error_cooldown: int = 60,
+        max_tokens: int = 0,
     ) -> None:
         self.api_url = (api_url or "").strip()
         self.timeout = aiohttp.ClientTimeout(total=timeout)
@@ -45,7 +48,11 @@ class TranslationService:
         self.enabled = enabled
         self._session = session
         self._own_session = False
-        self._openai_lock = asyncio.Lock()
+        # Use a Semaphore (not Lock) so multiple batches can run concurrently
+        # while still limiting total parallel API calls to avoid rate-limiting.
+        # A Lock serializes everything — with 96 fragments in 6 batches, that
+        # means 6 sequential ~10s API calls = 60s, far exceeding any budget.
+        self._openai_semaphore = asyncio.Semaphore(3)
         requested_mode = (mode or "auto").strip().lower()
         if requested_mode not in {"builtin", "openai", "auto"}:
             logger.warning(
@@ -55,14 +62,32 @@ class TranslationService:
         self.requested_mode = requested_mode
         self.api_key = (api_key or "").strip()
         self.model = (model or "gpt-4o-mini").strip()
+        self.stream = bool(stream)
         self.fallback_ttl = max(60, int(fallback_ttl))
+        self.error_cooldown = max(0, int(error_cooldown or 0))
+        # Cap the model's output length to stop free-tier LLMs from "running
+        # away" — without this, a batch of 8 short phrases can balloon into
+        # 1000-4000 tokens of rambling JSON/explanation, taking 30-90s and
+        # tripping every timeout in the pipeline.  0 means "do not send".
+        self.max_tokens = max(0, int(max_tokens or 0))
+        self._openai_cooldown_until = 0.0
+        self._last_cooldown_log = 0.0
         self.mode = self._resolve_mode()
+
+    def in_cooldown(self) -> bool:
+        """Whether the openai-compatible backend is currently rate-limiting."""
+
+        return (
+            self.mode == "openai"
+            and time.monotonic() < self._openai_cooldown_until
+        )
 
     def _resolve_mode(self) -> str:
         if self.requested_mode != "auto":
             return self.requested_mode
+            return self.requested_mode
         path = urlsplit(self.api_url).path.lower()
-        if self.api_key and (
+        if (
             path.endswith("/chat/completions")
             or path.endswith("/v1")
             or "/openai" in path
@@ -92,8 +117,11 @@ class TranslationService:
             "requested_mode": self.requested_mode,
             "url": f"{parsed.scheme}://{parsed.netloc}{parsed.path}" if parsed.netloc else "unset",
             "model": self.model,
+            "stream": self.stream,
+            "max_tokens": self.max_tokens,
             "key_present": bool(self.api_key),
             "target_lang": self.target_lang,
+            "error_cooldown": self.error_cooldown,
         }
 
     def bind_session(self, session: aiohttp.ClientSession | None) -> None:
@@ -116,13 +144,33 @@ class TranslationService:
 
     def _chat_url(self) -> str:
         """openai 模式：允许填 base 或完整 chat 地址。"""
+        return self._chat_urls()[0]
+
+    def _chat_urls(self) -> list[str]:
+        """Return likely OpenAI-compatible chat endpoints for permissive proxies."""
         url = self.api_url.rstrip("/")
+        parsed = urlsplit(url)
+        root = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else ""
+        path = parsed.path.rstrip("/").lower()
+        candidates: list[str] = []
         if url.endswith("/chat/completions"):
-            return url
-        if url.endswith("/v1"):
-            return url + "/chat/completions"
-        # 裸域名/base：补全
-        return url + "/v1/chat/completions"
+            candidates.append(url)
+        elif url.endswith("/v1"):
+            candidates.append(url + "/chat/completions")
+            if root:
+                candidates.append(root + "/chat/completions")
+        elif path in {"", "/"}:
+            candidates.append(url + "/v1/chat/completions")
+            candidates.append(url + "/chat/completions")
+        else:
+            candidates.append(url + "/chat/completions")
+            if root:
+                candidates.append(root + "/v1/chat/completions")
+        deduped: list[str] = []
+        for candidate in candidates:
+            if candidate and candidate not in deduped:
+                deduped.append(candidate)
+        return deduped or [url]
 
     @staticmethod
     def _localization_system_prompt(
@@ -301,9 +349,6 @@ class TranslationService:
             return text
 
     async def _translate_openai(self, text: str, to_lang: str | None) -> str:
-        if not self.api_key:
-            logger.warning("[HD2] openai 翻译模式缺少 api_key，返回原文")
-            return text
         lang = to_lang or self.target_lang or "zh"
         lang_name = "简体中文" if lang.startswith("zh") else lang
         system = self._localization_system_prompt(lang_name, batch=False)
@@ -314,37 +359,68 @@ class TranslationService:
                 {"role": "user", "content": text.strip()},
             ],
             "temperature": 0.3,
+            # Non-stream for reliability with free/slow models — streaming
+            # is more prone to client_gone and chunk-parsing issues.
             "stream": False,
         }
+        if self.max_tokens > 0:
+            payload["max_tokens"] = self.max_tokens
         content = await self._request_openai_content(payload)
         content = content.strip().strip('"').strip("“”").strip()
         return content if content and content != text.strip() else text
 
     @staticmethod
-    def _extract_openai_batch(content: str, expected: int) -> list[str] | None:
+    def _extract_openai_batch(content: str) -> list[str] | None:
+        """Best-effort extraction of a translation array from an LLM response.
+
+        Accepts the documented ``{"translations": [...]}`` envelope plus several
+        common wrappers (top-level array, ``{"data": {...}}``, nested ``data``).
+        Returns the parsed list (which may be shorter/longer than expected) so
+        the caller can fall back to per-item translation when lengths mismatch.
+        Returns ``None`` only when no array can be recovered at all.
+        """
+
         raw = str(content or "").strip()
         if raw.startswith("```"):
             raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
             raw = re.sub(r"\s*```$", "", raw)
+        # 模型偶尔在 JSON 前后混入说明文字，截取首个 { 或 [ 到末尾再尝试解析
+        first_obj = raw.find("{")
+        first_arr = raw.find("[")
+        if first_obj != -1 or first_arr != -1:
+            start = min(x for x in (first_obj, first_arr) if x != -1)
+            if start > 0:
+                raw = raw[start:]
         try:
             payload = json.loads(raw)
         except (TypeError, ValueError, json.JSONDecodeError):
             return None
-        values = payload.get("translations") if isinstance(payload, dict) else payload
-        if not isinstance(values, list) or len(values) != expected:
+
+        def _strings(values: Any) -> list[str]:
+            return [str(v).strip() for v in values if isinstance(v, str) and v.strip()]
+
+        if isinstance(payload, list):
+            values = _strings(payload)
+            return values or None
+        if not isinstance(payload, dict):
             return None
-        if not all(isinstance(value, str) and value.strip() for value in values):
-            return None
-        return [value.strip() for value in values]
+        # 在常见层级里找第一个非空字符串数组
+        for container in (payload, payload.get("data"), payload.get("result")):
+            if not isinstance(container, dict):
+                continue
+            for key in ("translations", "data", "result", "items", "list"):
+                candidate = container.get(key)
+                if isinstance(candidate, list):
+                    values = _strings(candidate)
+                    if values:
+                        return values
+        return None
 
     async def _translate_openai_batch(
         self,
         texts: list[str],
         to_lang: str | None,
     ) -> list[str]:
-        if not self.api_key:
-            logger.warning("[HD2] openai 翻译模式缺少 api_key，返回原文")
-            return texts
         lang = to_lang or self.target_lang or "zh"
         lang_name = "简体中文" if lang.startswith("zh") else lang
         system = self._localization_system_prompt(lang_name, batch=True)
@@ -358,67 +434,243 @@ class TranslationService:
                 },
             ],
             "temperature": 0.2,
+            # CRITICAL: batch translation must NOT use streaming.  When the
+            # output is JSON and max_tokens truncates mid-string, streaming
+            # produces incomplete chunks that json.loads cannot parse — every
+            # fragment falls back to原文.  Non-stream returns the full (even
+            # if truncated) response in one shot, which the extractor can at
+            # least attempt to recover.
             "stream": False,
         }
+        # Cap output: 16 short phrases need at most ~1000 tokens of JSON.
+        # Without this, free-tier models can "run away" to 1000-4000 tokens.
+        if self.max_tokens > 0:
+            payload["max_tokens"] = self.max_tokens
         content = await self._request_openai_content(payload)
-        translated = self._extract_openai_batch(content, len(texts))
-        if translated is None:
-            if content:
-                logger.warning("[HD2] openai 批量翻译返回格式无效")
+        # 冷却期 / 接口故障：_request_openai_content 返回空串，逐条也救不回
+        if not content:
             return texts
-        return translated
+        parsed = self._extract_openai_batch(content)
+        if parsed is None:
+            logger.warning(
+                "[HD2] openai 批量翻译返回格式无效，降级逐条翻译（%d 条）", len(texts)
+            )
+            return await self._fallback_single_translate(texts, to_lang)
+        if len(parsed) == len(texts):
+            return parsed
+
+        # Length mismatch is common with free models (extra commentary or a
+        # split item).  Keep as many ordered items as we can, then only repair
+        # the missing tail with single-item calls instead of redoing the whole
+        # batch.  Extra trailing items are discarded.
+        keep = min(len(parsed), len(texts))
+        results = list(parsed[:keep])
+        missing = texts[keep:]
+        logger.warning(
+            "[HD2] openai 批量翻译数量不匹配 expected=%d got=%d，保留前 %d 条并对剩余 %d 条逐条补齐",
+            len(texts),
+            len(parsed),
+            keep,
+            len(missing),
+        )
+        if not missing:
+            return results
+        repaired = await self._fallback_single_translate(missing, to_lang)
+        results.extend(repaired)
+        if len(results) < len(texts):
+            results.extend(texts[len(results) :])
+        return results[: len(texts)]
+
+    async def _fallback_single_translate(
+        self, texts: list[str], to_lang: str | None
+    ) -> list[str]:
+        """Batch failed/ambiguous: translate one-by-one and keep best effort.
+
+        Each request is spaced by a short delay to avoid hammering the API and
+        triggering rate limits when a large batch falls back to per-item calls.
+        """
+
+        results: list[str] = []
+        # Cap per-item fallback to avoid a request burst, but cover at least
+        # the batch size so a 16-item batch doesn't lose 11 items to原文.
+        cap = max(5, min(len(texts), 10))
+        for index, text in enumerate(texts[:cap]):
+            if index > 0:
+                await asyncio.sleep(1.5)
+            translated = await self._translate_openai(text, to_lang)
+            # _translate_openai 失败时返回原文，保留原文比丢掉更安全
+            results.append(translated if translated else text)
+            if self.in_cooldown():
+                break
+        if len(results) < len(texts):
+            results.extend(texts[len(results) :])
+        return results
 
     async def _request_openai_content(self, payload: dict[str, Any]) -> str:
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
             "User-Agent": self.user_agent,
-            "Accept": "application/json",
+            "Accept": (
+                "text/event-stream"
+                if payload.get("stream")
+                else "application/json"
+            ),
         }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         try:
-            async with self._openai_lock:
+            # Check cooldown (fast, non-blocking path — no semaphore needed)
+            now = time.monotonic()
+            if now < self._openai_cooldown_until:
+                remaining = self._openai_cooldown_until - now
+                if now - self._last_cooldown_log >= 15:
+                    self._last_cooldown_log = now
+                    logger.warning(
+                        "[HD2] openai 翻译冷却中，%.0f 秒后重试",
+                        remaining,
+                    )
+                return ""
+            # Limit concurrency (not serialize) so multiple batches can run
+            # in parallel while staying under the API's rate limit.
+            async with self._openai_semaphore:
+                # Re-check cooldown after acquiring the semaphore — another
+                # request may have triggered it while we were waiting.
+                now = time.monotonic()
+                if now < self._openai_cooldown_until:
+                    return ""
                 session = await self._ensure_session()
-                for attempt in range(2):
-                    async with session.post(
-                        self._chat_url(),
-                        json=payload,
-                        headers=headers,
-                        proxy=self.proxy_url,
-                        timeout=self.timeout,
-                    ) as resp:
-                        if resp.status == 200:
-                            data = await resp.json(content_type=None)
-                            choices = (data or {}).get("choices") or []
-                            if not choices:
+                urls = self._chat_urls()
+                for url_index, chat_url in enumerate(urls):
+                    for attempt in range(2):
+                        async with session.post(
+                            chat_url,
+                            json=payload,
+                            headers=headers,
+                            proxy=self.proxy_url,
+                            timeout=self.timeout,
+                        ) as resp:
+                            if resp.status == 200:
+                                if payload.get("stream"):
+                                    return await self._read_openai_stream_content(resp)
+                                data = await resp.json(content_type=None)
+                                choices = (data or {}).get("choices") or []
+                                if not choices:
+                                    return ""
+                                return str(
+                                    (choices[0].get("message") or {}).get("content")
+                                    or ""
+                                ).strip()
+                            body = ""
+                            try:
+                                body = (await resp.text())[:160]
+                            except Exception:
+                                pass
+                            if resp.status == 404 and url_index + 1 < len(urls):
+                                logger.warning(
+                                    "[HD2] openai 翻译 endpoint 404: %s，尝试备用 endpoint",
+                                    chat_url,
+                                )
+                                break
+                            if resp.status in {429, 567}:
+                                self._enter_openai_cooldown(resp, body)
+                                logger.warning(
+                                    "[HD2] openai 翻译 status=%s body=%s",
+                                    resp.status,
+                                    body,
+                                )
                                 return ""
-                            return str(
-                                (choices[0].get("message") or {}).get("content")
-                                or ""
-                            ).strip()
-                        body = ""
-                        try:
-                            body = (await resp.text())[:160]
-                        except Exception:
-                            pass
-                        if resp.status in {500, 502, 503, 504} and attempt == 0:
+                            if resp.status in {500, 502, 503, 504} and attempt == 0:
+                                logger.warning(
+                                    "[HD2] openai 翻译 status=%s，2 秒后重试一次",
+                                    resp.status,
+                                )
+                                await asyncio.sleep(2)
+                                continue
                             logger.warning(
-                                "[HD2] openai 翻译 status=%s，2 秒后重试一次",
+                                "[HD2] openai 翻译 status=%s body=%s",
                                 resp.status,
+                                body,
                             )
-                            await asyncio.sleep(2)
-                            continue
-                        logger.warning(
-                            "[HD2] openai 翻译 status=%s body=%s",
-                            resp.status,
-                            body,
-                        )
-                        return ""
+                            if resp.status in {500, 502, 503, 504}:
+                                self._enter_openai_cooldown(resp, body)
+                            return ""
                 return ""
         except asyncio.CancelledError:
             raise
         except Exception as e:
             logger.warning(f"[HD2] openai 翻译失败: {e}")
             return ""
+
+    @staticmethod
+    def _stream_content_text(value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        if not isinstance(value, list):
+            return ""
+        parts: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts)
+
+    async def _read_openai_stream_content(
+        self,
+        response: aiohttp.ClientResponse,
+    ) -> str:
+        """Collect an OpenAI-compatible SSE response into one final message."""
+
+        parts: list[str] = []
+        async for raw_line in response.content:
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            if not line or not line.startswith("data:"):
+                continue
+            data_text = line[5:].strip()
+            if data_text == "[DONE]":
+                break
+            try:
+                event = json.loads(data_text)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            choices = event.get("choices") if isinstance(event, dict) else None
+            if not isinstance(choices, list) or not choices:
+                continue
+            choice = choices[0] if isinstance(choices[0], dict) else {}
+            delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
+            content = self._stream_content_text(delta.get("content"))
+            if not content:
+                message = (
+                    choice.get("message")
+                    if isinstance(choice.get("message"), dict)
+                    else {}
+                )
+                content = self._stream_content_text(message.get("content"))
+            if content:
+                parts.append(content)
+        return "".join(parts).strip()
+
+    def _enter_openai_cooldown(self, response: Any, body: str = "") -> None:
+        if self.error_cooldown <= 0:
+            return
+        delay = float(self.error_cooldown)
+        headers = getattr(response, "headers", {}) or {}
+        retry_after = None
+        try:
+            retry_after = headers.get("Retry-After")
+        except AttributeError:
+            retry_after = None
+        if retry_after:
+            try:
+                delay = max(delay, float(retry_after))
+            except ValueError:
+                pass
+        self._openai_cooldown_until = max(
+            self._openai_cooldown_until,
+            time.monotonic() + delay,
+        )
 
 
 class TranslationCache:

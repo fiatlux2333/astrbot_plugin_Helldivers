@@ -13,7 +13,7 @@ desc: |
   - Steam 官方更新公告
   - 战线战况
   - Helldivers Wiki 查询
-version: 1.8.5
+version: 1.8.6
 author: 牡蛎
 repo: https://github.com/fiatlux2333/astrbot_plugin_Helldivers
 astrbot_version: ">=4.16,<5"

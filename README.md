@@ -4,7 +4,7 @@
 
 为群聊提供银河战争总览、战争统计、重要指令、Companion 中文网页截图、民主空间站、星球详情、银河战争地图、Steam 公告、Wiki 查询与“银河快报”自动推送。
 
-当前版本：`v1.8.5`
+当前版本：`v1.8.6`
 
 > **为了超级地球，为了管理式民主。**
 
@@ -22,12 +22,13 @@
 - **银河战争统计** (`/hd2stats`) - 在线兵力分布与详细战争数据
 - **重要指令** (`/order` `/major_order`) - 当前活跃的 Major Order 广播卡
 - **个人指令** (`/personal_order` `/po`) - 默认使用 Companion 社区 JSON 源，校验快照新鲜度并校正剩余时间
-- **最新新闻** (`/hd2news`) - 聚焦、翻译并截取 Companion 最新新闻，失败时回退中文新闻卡片
+- **最新新闻** (`/hd2news`) - 聚焦、翻译并截取 Companion 最新新闻；翻译失败时优先返回上次翻译快照，无快照则返回英文截图，截图本身失败才降级本地卡片
 - **Steam 更新** (`/steam`) - 官方补丁、公告与更新说明
-- **民主空间站** (`/dss`) - 翻译并截取完整 DSS 主面板；文字摘要不输出战术行动，失败时回退本地卡片
+- **民主空间站** (`/dss`) - 翻译并截取完整 DSS 主面板；翻译不完整时优先返回上次翻译快照，无快照则返回部分翻译截图，绝不降级
 - **银河战争地图** (`/map`) - 阵营控制区、战役与活跃星球标注
 - **战线战况** (`/warfront <阵营>`) - 玩家部署与解放进度 Top 10
-- **星球详情** (`/planet <名称或编号>`) - 翻译 Companion 完整星球页面与文字情报，支持中文名、英文名、编号、slug 和链接
+- **星球详情** (`/planet <名称或编号>`) - 翻译 Companion 完整星球页面与文字情报；翻译不完整时优先返回上次翻译快照，无快照则返回部分翻译截图，绝不降级
+- **Companion 首页** (`/companion`) - 截取 Companion 首页整屏并翻译；翻译不完整时优先返回上次翻译快照，无快照则返回部分翻译截图，可选显示更多战役卡片
 - **全球事件** (`/global_events`) - 当前活跃事件简报
 - **Wiki 查询** (`/wiki <关键词>`) - Helldivers Wiki 词条搜索与摘要
 
@@ -46,7 +47,13 @@
 - 全局请求限流、重试退避与 429 冷却
 - Pillow 本地卡片渲染，以及 Playwright + Chromium 原网页截图
 - AI 翻译支持内置接口与 OpenAI 兼容接口，并使用《绝地潜兵2》本地化提示词和固定术语
-- Companion 截图具备总超时、并发限制、目标白名单、翻译状态感知缓存和图片安全校验
+- 翻译前自动预替换官方中文术语词表（敌人/星球/星系/战备共 548 条），减少 LLM 调用、避免术语跑偏
+- 批量翻译使用并行提交（`asyncio.gather`），单批失败不影响其他批次，预算超时后未完成的批次转入后台继续写入缓存
+- 翻译输出 `max_tokens` 限制（默认 500），防止免费/慢速模型输出爆炸（无限制时可能生成数千 token 导致超时）
+- Companion 截图后台定时预热：启动后自动预翻译新闻和空间站页面，用户请求时直接返回缓存截图，无需等待翻译 API
+- Companion 截图 stale-while-revalidate：翻译失败时优先返回上次翻译截图（2 小时窗口），而非降级或返回英文
+- Companion 截图页面加载检测使用 DOM 元素检测（`.backdrop.pulse-2`），而非文本匹配，避免误判正常页面内容
+- Companion 截图永不因翻译不完整而报错：优先全中文 → 旧翻译快照 → 部分翻译 → 英文，始终返回图片
 - B站 Cookie 登录校验、WBI 签名与动态接口回退
 - 远程图片大小、像素与来源域名限制
 
@@ -73,6 +80,17 @@ git clone https://github.com/fiatlux2333/astrbot_plugin_Helldivers
 cd astrbot_plugin_Helldivers
 pip install -r requirements.txt
 ```
+
+### 发布到插件市场前打包
+
+AstrBot 插件市场压缩包上限为 **16MB**。请使用仓库根目录的 `pack.sh` 生成干净 zip，不要直接打包整个工作区（会把 `.git`、`__pycache__` 等垃圾文件打进去）：
+
+```bash
+bash pack.sh
+# 输出: dist/astrbot_plugin_Helldivers.zip
+```
+
+当前实测约 **6.4MB / 100 个文件**，已排除 `.git`、`__pycache__`、`.pytest_cache`、`.playwright-mcp`、`dist`、`data` 等。
 
 3. 使用 Playwright 网页截图时安装 Chromium：
 
@@ -113,15 +131,18 @@ Windows 和 macOS 通常可直接使用系统中文字体。
 
 ### Companion 图片
 
-`/hd2news`、`/dss` 与 `/planet` 默认使用 AstrBot 容器内的 Playwright + Chromium 截取 Companion 原网页，不需要 Browserless 或额外 Docker 容器。开启 `enable_translation` 时，截图前会提取可见英文文本，经过游戏术语本地化后写回页面。
+`/hd2news`、`/dss`、`/planet` 与 `/companion` 默认使用 AstrBot 容器内的 Playwright + Chromium 截取 Companion 原网页，不需要 Browserless 或额外 Docker 容器。开启 `enable_translation` 时，截图前会提取可见英文文本，经过游戏术语本地化后写回页面。
 
 - `/hd2news` 聚焦最新新闻正文。
-- `/dss` 保留空间站、星球面板和战术行动在内的完整主面板；额外文字摘要不再重复输出战术行动。
+- `/dss` 保留空间站、星球面板和战术行动在内的完整主面板。
 - `/planet` 使用完整桌面视口，保留星球主图、属性与右侧统计区域。
-- 翻译接口整体失败时，本次图片仍可发送，但不会写入正常截图缓存，下次查询会重新尝试翻译。
+- `/companion` 截取 Companion 首页整屏。
+- 翻译不完整时**永不报错**：优先返回上次翻译快照（2 小时窗口）→ 部分翻译截图 → 英文截图，始终返回图片。
+- 翻译失败的截图（全英文或部分翻译）不会写入主缓存文件，下次请求会重新尝试翻译。
+- 后台预热每 5 分钟自动预翻译新闻和空间站页面，用户请求时直接返回缓存截图。
 - `companion_screenshot_timeout` 覆盖启动浏览器、等待页面、翻译和截图的完整流程。
 
-如果容器没有 Chromium，可以把 `companion_render_backend` 改为 `local`，直接使用中文 Pillow 数据卡片。也可以改为 `browserless` 使用远程截图服务，但 Browserless 的 `/screenshot` 接口无法调用插件翻译器：启用翻译时插件会自动回退中文 Pillow 卡片，只有关闭翻译后才直接返回远程英文网页截图。
+如果容器没有 Chromium，可以把 `companion_render_backend` 改为 `local`，直接使用中文 Pillow 数据卡片。也可以改为 `browserless` 使用远程截图服务，但 Browserless 的 `/screenshot` 接口无法调用插件翻译器：启用翻译时会直接报错，只有关闭翻译后才直接返回远程英文网页截图。要保留中文 Companion 截图，请使用 `playwright` 后端。
 
 如果 AstrBot 也在 Docker 中运行，可在 AstrBot 所在网络启动 Browserless：
 
@@ -174,11 +195,15 @@ docker run -d \
 | `enable_translation` | bool | `true` | 翻译重要指令、Companion 页面、星球/DSS 情报、Steam 公告与可选 Wiki 摘要 |
 | `translation_mode` | string | `auto` | `auto` / `builtin` / `openai` |
 | `translation_api_url` | string | uapis 默认地址 | 翻译接口或 OpenAI 兼容 API 地址 |
-| `translation_api_key` | string | `""` | OpenAI 兼容接口 Bearer Token |
+| `translation_api_key` | text | `""` | OpenAI 兼容接口 Bearer Token（敏感字段，已脱敏显示） |
 | `translation_model` | string | `gpt-4o-mini` | OpenAI 兼容模型名 |
+| `translation_stream` | bool | `false` | OpenAI 兼容接口流式响应；免费/慢速模型建议关闭 |
+| `translation_max_tokens` | int | `1200` | 翻译输出最大 token 数（16条短语约需800-1000）；0=不限制。防止免费模型输出爆炸 |
 | `translation_timeout` | int | `30` | 单次翻译请求超时（秒） |
 | `translation_target_lang` | string | `zh-CN` | 翻译目标语言 |
-| `translation_retry_fallback_seconds` | int | `900` | 翻译失败后英文回退结果的短期缓存时间 |
+| `translation_retry_fallback_seconds` | int | `60` | 翻译失败状态的短期缓存时间，到期后重新尝试 |
+| `translation_error_cooldown_seconds` | int | `60` | OpenAI 兼容接口返回 429/567/5xx 后暂停翻译请求 |
+| `drop_untranslated_content` | bool | `true` | 翻译失败时剔除明显英文正文，不把原文当译文发送 |
 
 OpenAI 兼容配置示例：
 
@@ -188,11 +213,13 @@ OpenAI 兼容配置示例：
   "translation_mode": "openai",
   "translation_api_url": "https://api.openai.com/v1",
   "translation_api_key": "sk-xxx",
-  "translation_model": "gpt-4o-mini"
+  "translation_model": "gpt-4o-mini",
+  "translation_stream": false,
+  "translation_max_tokens": 1200
 }
 ```
 
-OpenAI 兼容模式会批量翻译 Companion 页面片段，并要求模型遵循《绝地潜兵2》的中文术语与军事广播语气。遇到 `500`、`502`、`503` 或 `504` 时会等待 2 秒后重试一次；失败结果不会长期污染中文翻译缓存。
+OpenAI 兼容模式会批量翻译 Companion 页面片段（每批 16 条），并要求模型遵循《绝地潜兵2》的中文术语与军事广播语气。`translation_max_tokens` 限制单次翻译输出长度，防止免费/慢速模型输出数千 token 导致超时（16 条短语约需 800~1000 token）。`translation_stream` 默认关闭——免费模型流式响应更容易触发超时和异常。遇到 `500`、`502`、`503` 或 `504` 时会等待 2 秒后重试一次；遇到 `429` 或网关 HTML 错误时会进入短冷却，失败结果不会长期污染中文翻译缓存。
 
 ### 银河快报
 
@@ -212,16 +239,23 @@ Cookie 属于敏感登录凭据，不要发送给他人或提交到仓库。插�
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `enable_companion_screenshots` | bool | `true` | 启用 `/hd2news`、`/dss` 与 `/planet` 的 Companion 网页截图；失败时回退 Pillow |
+| `enable_companion_screenshots` | bool | `true` | 启用 `/hd2news`、`/dss`、`/planet` 与 `/companion` 的 Companion 网页截图 |
 | `companion_render_backend` | string | `playwright` | `playwright` 容器内翻译网页截图；`local` Pillow 数据渲染；`browserless` 仅在关闭翻译时返回远程英文网页截图 |
 | `companion_browserless_url` | string | `http://browserless:3000` | Browserless 基础地址或完整 `/screenshot` 地址 |
 | `companion_browserless_token` | text | `""` | Browserless Cloud 或受保护自建服务的 Token |
 | `companion_browserless_proxy_url` | string | `""` | AstrBot 访问 Browserless 时使用的代理 |
 | `companion_screenshot_timeout` | int | `90` | 截图总超时（秒） |
 | `companion_screenshot_wait_ms` | int | `5000` | SPA 与图表额外加载等待时间（毫秒） |
-| `companion_screenshot_cache_ttl` | int | `300` | 同一页面、同一翻译配置的截图缓存时间（秒） |
+| `companion_page_load_timeout` | float | `20` | 等待页面数据加载就绪的时间（秒） |
+| `companion_translation_timeout` | float | `60` | 前台翻译等待时间（秒）；超时后发送已完成的部分翻译，后台继续写入缓存 |
+| `companion_translation_batch_timeout` | float | `20` | 单批翻译等待时间（秒） |
+| `companion_screenshot_cache_ttl` | int | `300` | 截图缓存时间（秒），建议与预热间隔一致 |
 | `companion_screenshot_max_bytes` | int | `12582912` | 单张截图最大字节数 |
 | `companion_screenshot_max_pixels` | int | `20000000` | 单张截图最大像素数 |
+| `companion_show_inactive` | bool | `false` | `/companion` 自动切换 Inactive Campaigns 为 Shown，截图含更多战役卡片（约 +1.5s；设置会持久化到网站） |
+| `companion_warmup_enabled` | bool | `true` | 启用后台定时预热，自动预翻译 Companion 页面，用户请求时直接返回缓存截图 |
+| `companion_warmup_interval` | int | `300` | 后台预热间隔（秒），建议与截图缓存时间一致 |
+| `companion_warmup_kinds` | string | `news_latest,station` | 后台预热页面，逗号分隔：`news_latest`、`station`、`homepage` |
 
 ### 功能与图片
 
@@ -246,11 +280,13 @@ Cookie 属于敏感登录凭据，不要发送给他人或提交到仓库。插�
 /order  或 /major_order            当前重要指令
 /personal_order 或 /po             当前个人指令
 /hd2news                           Companion 最新新闻截图
+/companion                         Companion 首页截图（含翻译）
 /steam                             Steam 官方更新
 /dss                               Companion 民主空间站截图与中文情报
 /map                               银河战争地图
 /warfront <阵营>                   阵营战线战况
-/planet <名称、编号、slug或链接>    Companion 星球详情；失败时回退卡片
+/planet <名称、编号、slug或链接>    Companion 星球详情；失败时提示重试
+/hd2refresh 或 /刷新缓存             强制刷新 Companion 截图缓存
 /global_events                     全球事件
 /wiki <关键词>                     Helldivers Wiki 查询
 /hd2  或 /help                     插件简短帮助
@@ -270,8 +306,8 @@ Illuminate / 光能族
 ```text
 /银河快报                          立即获取最近一期
 /galaxy_news                       立即获取最近一期
-/银河快报订阅                      订阅当前群（AstrBot 管理员）
-/银河快报退订                      取消当前群订阅（AstrBot 管理员）
+/银河快报订阅                      订阅当前群
+/银河快报退订                      取消当前群订阅
 ```
 
 开启自动推送后，第一次成功请求只记录当前动态作为基线。以后出现正文包含 `bilibili_keyword` 的新动态时，插件会向已订阅群发送正文、图片与原动态出处。
@@ -279,15 +315,18 @@ Illuminate / 光能族
 ### Helldivers Companion
 
 ```text
-/hd2news
-/dss
+/companion                         首页整屏截图（可选显示更多战役卡片）
+/hd2news                           最新新闻截图
+/dss                               民主空间站截图
 /planet meissa
 /planet 希斯
 /planet 112
 /planet https://helldiverscompanion.com/#hellpad/planets/meissa
 ```
 
-`playwright` 模式在 AstrBot 容器内保留 Companion 页面样式并翻译可见文本；`local` 模式直接使用插件卡片；`browserless` 只在关闭翻译时返回远程英文网页截图。网页超时、页面不可用或后端能力不匹配时，命令会自动回退 Pillow。星球查询会把中文名、编号、英文名称和 Companion 链接解析为受信任 slug。插件只允许访问内置的 `helldiverscompanion.com` 新闻、DSS 和星球路由，避免任意网页截图与 SSRF。
+`/companion` 截取 Companion 首页整屏并翻译可见英文。开启 `companion_show_inactive` 后会自动切换 Inactive Campaigns 设置为 Shown，截图含更多战役卡片（约增加 1.5 秒）；该设置会持久化到网站，可能影响你浏览器访问 Companion 的默认状态。
+
+`playwright` 模式在 AstrBot 容器内保留 Companion 页面样式并翻译可见文本；`local` 模式直接使用插件卡片；`browserless` 只在关闭翻译时返回远程英文网页截图。翻译不完整时优先返回上次翻译快照（2 小时窗口），无快照则返回部分翻译或英文截图——**翻译相关的任何情况都不会报错，始终返回图片**。星球查询会把中文名、编号、英文名称和 Companion 链接解析为受信任 slug。插件只允许访问内置的 `helldiverscompanion.com` 新闻、DSS 和星球路由，避免任意网页截图与 SSRF。
 
 ## 🖼️ 效果展示
 
@@ -308,22 +347,28 @@ Illuminate / 光能族
 - `services.py`：缓存、翻译、查询与图片渲染编排
 - `api_client.py`：Helldivers 2 Community API 与 Steam API 客户端
 - `bilibili_monitor.py`：银河快报轮询、WBI 签名、图文解析与去重
-- `companion_screenshot.py`：Companion 路由校验、本地 Playwright/Browserless 截图、总超时、翻译缓存隔离与图片安全校验
+- `companion_screenshot.py`：Companion 路由校验、本地 Playwright/Browserless 截图、DOM 元素级加载检测、总超时、翻译缓存隔离、stale-while-revalidate、后台预热与图片安全校验
 - `cache.py`：内存和磁盘缓存、后台刷新
-- `i18n.py`：官方中文星球名与界面术语
+- `glossary.py`：官方中文译名词表（敌人/星球/星系/战备 548 条），加载自 `assets/glossary/*.json`，提供翻译前的术语预替换
+- `i18n.py`：界面标签与星球名委托 glossary 查询
+- `translator.py`：OpenAI 兼容批量翻译、`max_tokens` 输出限制、并行批次、宽松解析、逐条降级与限流冷却
 - `*_renderer.py`：各类 Pillow 图片渲染器
+- `assets/glossary/*.json`：官方中文译名词表数据（敌人、星球、星系、战备）
 - `assets/`：本地徽章、阵营与战术行动素材
 
 ## ⚠️ 注意事项
 
 1. 建议填写 `api_contact`，并保持合理的缓存刷新间隔。
-2. 出现 `429` 时增大 `cache_update_interval` 与 `min_request_interval`。
+2. 出现 `429` 时增大 `cache_update_interval` 与 `min_request_interval`。翻译 API 频繁限流时可增大 `translation_error_cooldown_seconds`（默认 60 秒）。
 3. Steam 官方接口不可访问时，插件会尝试社区备用数据源；国内网络可配置 `proxy_url`。
 4. 未发现 Arrowhead 官方公开 Personal Order API。插件默认使用 Companion 社区 CDN，拒绝超过 3 天的旧快照，并根据快照时间修正 `expiresIn`；也可配置其他可信 HTTPS JSON 源。
 5. Pillow 或中文字体缺失时，图片可能无法生成或出现方框字。
 6. AstrBot 热重载残留旧 handler 时可能重复回复，完整重启 AstrBot 可清理旧实例。
 7. 银河快报转载会保留原动态出处，请遵守原作者的转载要求。
-8. Companion `playwright` 模式支持中文 DOM 翻译；`browserless` 在开启翻译时会回退 Pillow，关闭翻译时才保留远程英文页面样式。
+8. Companion `playwright` 模式支持中文 DOM 翻译，翻译不完整时优先返回上次翻译快照，无快照则返回部分翻译/英文截图，永不因翻译问题报错。后台预热每 5 分钟自动刷新翻译缓存，用户请求时通常直接命中缓存秒回。
+9. 免费/慢速翻译模型（如 longcat-2.0-free）建议关闭 `translation_stream` 并保持 `translation_max_tokens=1200`，防止模型输出爆炸导致超时。正式模型（gpt-4o-mini 等）可适当增大 `translation_max_tokens`。
+10. Companion 截图缓存时间（`companion_screenshot_cache_ttl`）建议与预热间隔（`companion_warmup_interval`）保持一致（均默认 300 秒），确保预热刷新后用户能立即拿到新截图。
+11. 官方译名词表位于 `assets/glossary/*.json`，修改词表后需重载插件生效。
 
 ## 📊 数据源
 

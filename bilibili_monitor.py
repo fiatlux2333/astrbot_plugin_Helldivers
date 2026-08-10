@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -521,6 +522,12 @@ class BilibiliMonitor:
                 paths = await self.download_images(post)
                 await self.send_post(post, paths, list(self.sessions))
                 sent += 1
+                # 每条推送成功后立即落盘，避免中途失败导致下一轮整批重发
+                self.seen_ids = list(
+                    dict.fromkeys([post.dynamic_id] + self.seen_ids)
+                )[:200]
+                self._save_state()
+        # 用最新一次拉取的全量 ID 兜底刷新（仍含未匹配关键字的动态）
         self.seen_ids = list(dict.fromkeys(current_ids + self.seen_ids))[:200]
         self._save_state()
         return sent
@@ -571,7 +578,9 @@ class BilibiliMonitor:
             suffix = Path(urlparse(url).path).suffix.lower()
             if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
                 suffix = ".jpg"
-            path = self.image_dir / f"{post.dynamic_id}_{index}_{digest}{suffix}"
+            # dynamic_id 来自外部 API 响应，剥离路径分隔符/`..`避免路径穿越
+            safe_id = re.sub(r"[^0-9a-zA-Z_-]", "", post.dynamic_id) or "unknown"
+            path = self.image_dir / f"{safe_id}_{index}_{digest}{suffix}"
             if path.exists() and path.stat().st_size > 0:
                 paths.append(path)
                 continue

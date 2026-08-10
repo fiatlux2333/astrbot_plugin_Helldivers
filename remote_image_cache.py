@@ -311,6 +311,7 @@ class RemoteImageCache:
         now = time.time()
         if not force and image_path.is_file() and metadata:
             age = now - float(metadata.get("fetched_at") or 0)
+            # TTL=0 统一表示「永不过期」（与 cached_path() 快路径保持一致）
             if self.cache_ttl == 0 or age <= self.cache_ttl:
                 return self._record(image_path, metadata, from_cache=True)
         if not force and negative_path.is_file():

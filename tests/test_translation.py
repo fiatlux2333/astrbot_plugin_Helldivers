@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-import sys
+import json
 import tempfile
-import types
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-if "aiohttp" not in sys.modules:
+try:
+    import aiohttp  # type: ignore
+except ImportError:  # pragma: no cover - fallback for stripped test envs
+    import sys
+    import types
+
     aiohttp = types.ModuleType("aiohttp")
 
     class _ClientTimeout:
@@ -15,13 +19,23 @@ if "aiohttp" not in sys.modules:
             self.kwargs = kwargs
 
     class _ClientSession:
-        closed = False
+        def __init__(self, *args, **kwargs):
+            self.headers = {}
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
 
     aiohttp.ClientTimeout = _ClientTimeout
     aiohttp.ClientSession = _ClientSession
     sys.modules["aiohttp"] = aiohttp
 
-if "astrbot.api" not in sys.modules:
+try:
+    from astrbot.api import logger  # noqa: F401
+except ImportError:  # pragma: no cover - fallback for stripped test envs
+    import sys
+    import types
+
     astrbot = types.ModuleType("astrbot")
     api = types.ModuleType("astrbot.api")
 
@@ -79,15 +93,23 @@ class TranslationTests(unittest.IsolatedAsyncioTestCase):
 
     def test_openai_batch_response_parser(self) -> None:
         extract = TranslationService._extract_openai_batch
+        # 标准 envelope
         self.assertEqual(
-            extract(
-                '```json\n{"translations":["最新消息","民主空间站"]}\n```',
-                2,
-            ),
+            extract('```json\n{"translations":["最新消息","民主空间站"]}\n```'),
             ["最新消息", "民主空间站"],
         )
-        self.assertIsNone(extract('{"translations":["数量不匹配"]}', 2))
-        self.assertIsNone(extract("not json", 2))
+        # 顶层数组
+        self.assertEqual(extract('["最新消息","民主空间站"]'), ["最新消息", "民主空间站"])
+        # data 包裹
+        self.assertEqual(
+            extract('{"data":{"translations":["最新消息","民主空间站"]}}'),
+            ["最新消息", "民主空间站"],
+        )
+        # 长度不等：宽松解析仍返回数组，由调用方决定降级（不再返回 None）
+        self.assertEqual(extract('{"translations":["数量不匹配"]}'), ["数量不匹配"])
+        # 完全无法解析才返回 None
+        self.assertIsNone(extract("not json"))
+        self.assertIsNone(extract('{"foo":"bar"}'))
 
     def test_hd2_localization_prompt_enforces_game_tone_and_terms(self) -> None:
         prompt = TranslationService._localization_system_prompt(
@@ -117,6 +139,75 @@ class TranslationTests(unittest.IsolatedAsyncioTestCase):
         result = await service.translate_texts(["News", "Station", "Planet"])
         self.assertEqual(result, ["译:News", "译:Station", "译:Planet"])
         self.assertEqual(service.batch_calls, 1)
+
+    async def test_openai_batch_length_mismatch_keeps_prefix_and_repairs_tail(
+        self,
+    ) -> None:
+        class MismatchService(TranslationService):
+            def __init__(self) -> None:
+                super().__init__(
+                    api_url="https://example.com/v1",
+                    mode="openai",
+                    api_key="secret",
+                )
+                self.fallback_calls: list[list[str]] = []
+
+            async def _request_openai_content(self, payload):
+                # expected=3, got=4 (one trailing commentary item)
+                return json.dumps(
+                    {
+                        "translations": [
+                            "最新消息",
+                            "民主空间站",
+                            "额外说明",
+                            "以上为全部翻译",
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+
+            async def _fallback_single_translate(self, texts, to_lang):
+                self.fallback_calls.append(list(texts))
+                return [f"补:{text}" for text in texts]
+
+        service = MismatchService()
+        result = await service._translate_openai_batch(
+            ["News", "Station", "Planet"],
+            "zh",
+        )
+        # Keep first 3 ordered items; discard the 4th extra commentary.
+        # No single-item repair needed because keep == expected.
+        self.assertEqual(result, ["最新消息", "民主空间站", "额外说明"])
+        self.assertEqual(service.fallback_calls, [])
+
+    async def test_openai_batch_short_response_repairs_missing_tail(self) -> None:
+        class ShortService(TranslationService):
+            def __init__(self) -> None:
+                super().__init__(
+                    api_url="https://example.com/v1",
+                    mode="openai",
+                    api_key="secret",
+                )
+                self.fallback_calls: list[list[str]] = []
+
+            async def _request_openai_content(self, payload):
+                # expected=3, got=2
+                return json.dumps(
+                    {"translations": ["最新消息", "民主空间站"]},
+                    ensure_ascii=False,
+                )
+
+            async def _fallback_single_translate(self, texts, to_lang):
+                self.fallback_calls.append(list(texts))
+                return [f"补:{text}" for text in texts]
+
+        service = ShortService()
+        result = await service._translate_openai_batch(
+            ["News", "Station", "Planet"],
+            "zh",
+        )
+        self.assertEqual(result, ["最新消息", "民主空间站", "补:Planet"])
+        self.assertEqual(service.fallback_calls, [["Planet"]])
 
     async def test_builtin_batch_uses_one_marked_request(self) -> None:
         class BatchService(TranslationService):
@@ -189,6 +280,190 @@ class TranslationTests(unittest.IsolatedAsyncioTestCase):
             content = await service._request_openai_content({"model": "test"})
         self.assertEqual(content, "重试成功")
         self.assertEqual(session.calls, 2)
+
+    async def test_openai_429_enters_cooldown_without_retrying(self) -> None:
+        class FakeResponse:
+            status = 429
+            headers = {}
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def text(self):
+                return "rate limited"
+
+        class FakeSession:
+            def __init__(self):
+                self.calls = 0
+
+            def post(self, *args, **kwargs):
+                self.calls += 1
+                return FakeResponse()
+
+        service = TranslationService(
+            api_url="https://example.com/v1",
+            mode="openai",
+            api_key="secret",
+            error_cooldown=60,
+        )
+        session = FakeSession()
+
+        async def get_session():
+            return session
+
+        service._ensure_session = get_session
+        first = await service._request_openai_content({"model": "test"})
+        second = await service._request_openai_content({"model": "test"})
+
+        self.assertEqual(first, "")
+        self.assertEqual(second, "")
+        self.assertEqual(session.calls, 1)
+
+    async def test_openai_without_key_still_requests_endpoint(self) -> None:
+        class FakeResponse:
+            status = 200
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def text(self):
+                return ""
+
+            async def json(self, content_type=None):
+                return {"choices": [{"message": {"content": "翻译结果"}}]}
+
+        class FakeSession:
+            def __init__(self):
+                self.calls: list[tuple[str, dict]] = []
+
+            def post(self, url, **kwargs):
+                self.calls.append((url, kwargs))
+                return FakeResponse()
+
+        service = TranslationService(
+            api_url="https://example.com/v1",
+            mode="openai",
+            api_key="",
+        )
+        session = FakeSession()
+
+        async def get_session():
+            return session
+
+        service._ensure_session = get_session
+        content = await service._request_openai_content({"model": "test"})
+
+        self.assertEqual(content, "翻译结果")
+        self.assertEqual(len(session.calls), 1)
+        self.assertNotIn("Authorization", session.calls[0][1]["headers"])
+
+    async def test_openai_stream_reassembles_sse_content(self) -> None:
+        class FakeContent:
+            def __aiter__(self):
+                async def iterate():
+                    yield (
+                        b'data: {"choices":[{"delta":{"content":'
+                        b'"{\\\"translations\\\":[\\\"\\u65b0"}}]}\n'
+                    )
+                    yield (
+                        b'data: {"choices":[{"delta":{"content":'
+                        b'"\\u95fb\\\",\\\"\\u7a7a\\u95f4\\u7ad9\\\"]}"}}]}\n'
+                    )
+                    yield b"data: [DONE]\n"
+
+                return iterate()
+
+        class FakeResponse:
+            status = 200
+            content = FakeContent()
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class FakeSession:
+            def __init__(self):
+                self.headers = {}
+
+            def post(self, *args, **kwargs):
+                self.headers = kwargs.get("headers") or {}
+                return FakeResponse()
+
+        service = TranslationService(
+            api_url="https://example.com/v1",
+            mode="openai",
+            api_key="secret",
+            stream=True,
+        )
+
+        session = FakeSession()
+
+        async def get_session():
+            return session
+
+        service._ensure_session = get_session
+        content = await service._request_openai_content(
+            {"model": "test", "stream": True}
+        )
+
+        self.assertEqual(content, '{"translations":["\u65b0\u95fb","\u7a7a\u95f4\u7ad9"]}')
+        self.assertEqual(
+            service._extract_openai_batch(content),
+            ["\u65b0\u95fb", "\u7a7a\u95f4\u7ad9"],
+        )
+        self.assertEqual(session.headers.get("Accept"), "text/event-stream")
+
+    async def test_openai_404_tries_fallback_endpoint(self) -> None:
+        class FakeResponse:
+            def __init__(self, status, content=""):
+                self.status = status
+                self._content = content
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def text(self):
+                return self._content
+
+            async def json(self, content_type=None):
+                return {"choices": [{"message": {"content": "备用译文"}}]}
+
+        class FakeSession:
+            def __init__(self):
+                self.calls: list[str] = []
+
+            def post(self, url, **kwargs):
+                self.calls.append(url)
+                if len(self.calls) == 1:
+                    return FakeResponse(404, "not found")
+                return FakeResponse(200)
+
+        service = TranslationService(
+            api_url="https://example.com/v1",
+            mode="openai",
+            api_key="secret",
+        )
+        session = FakeSession()
+
+        async def get_session():
+            return session
+
+        service._ensure_session = get_session
+        content = await service._request_openai_content({"model": "test"})
+
+        self.assertEqual(content, "备用译文")
+        self.assertGreaterEqual(len(session.calls), 2)
 
     async def test_provider_change_invalidates_legacy_cache(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
