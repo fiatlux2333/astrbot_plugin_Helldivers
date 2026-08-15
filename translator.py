@@ -186,7 +186,7 @@ class TranslationService:
             "固定术语：Helldivers=绝地潜兵，Super Earth=超级地球，"
             "Managed Democracy=管理式民主，Ministry of Truth=真理部，"
             "Major Order=最高指令，Democracy Space Station/DSS=民主空间站/DSS，"
-            "Terminids=终结族，Automatons=机器人，Illuminate=光能族，"
+            "Terminids=终结族，Automatons=机器人，Illuminate=光能者，"
             "Defense Campaigns=防御战役，Liberation Campaigns=解放战役，"
             "Stratagem=战略配备，Hellpod=地狱舱，Eagle=飞鹰，Orbital=轨道。"
             "星球、扇区和行动名称优先采用插件提供的固定译名；"

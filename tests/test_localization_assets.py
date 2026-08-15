@@ -23,7 +23,7 @@ class LocalizationAssetTests(unittest.TestCase):
         expected = {
             "emblems/super_earth.png": (235, 294),
             "dss/dss_wireframe.png": (925, 769),
-            "user/map.png": (1149, 1149),
+            "user/map.png": (1280, 1280),
             "global_events/super_earth_flag.png": (752, 348),
             "user/map_template.png": (1024, 1024),
             "user/warfront_template.png": (1024, 1002),
@@ -45,7 +45,7 @@ class LocalizationAssetTests(unittest.TestCase):
         self.assertEqual(format_faction("Terminids"), "终结族")
         self.assertEqual(faction_cn("Terminids"), "终结族")
         self.assertEqual(format_faction("Automaton"), "机器人")
-        self.assertEqual(format_faction("Illuminate"), "光能族")
+        self.assertEqual(format_faction("Illuminate"), "光能者")
         self.assertEqual(format_status("active"), "活跃")
 
     def test_official_planets_and_dss_actions_are_localized(self) -> None:

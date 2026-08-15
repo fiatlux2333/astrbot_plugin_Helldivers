@@ -60,7 +60,7 @@ _FACTION_LABELS = {
     "Humans": "超级地球",
     "Terminids": "终结族",
     "Automaton": "机器人",
-    "Illuminate": "光能族",
+    "Illuminate": "光能者",
     "Unknown": "未占领",
 }
 _BIOME_PALETTES: dict[str, tuple[tuple[int, int, int], ...]] = {
@@ -1120,7 +1120,7 @@ class MapRenderer:
             ("超级地球", "Humans"),
             ("机器人", "Automaton"),
             ("终结族", "Terminids"),
-            ("光能族", "Illuminate"),
+            ("光能者", "Illuminate"),
         ]
         cell_w = max(60, (left_box[2] - left_box[0] - 24) // 4)
         for index, (name, faction) in enumerate(legend):

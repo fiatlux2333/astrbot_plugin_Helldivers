@@ -21,7 +21,7 @@ FACTION_ALIASES: dict[str, str] = {
     "illuminate": "Illuminate",
     "squids": "Illuminate",
     "光能": "Illuminate",
-    "光能族": "Illuminate",
+    "光能者": "Illuminate",
     "humans": "Humans",
     "human": "Humans",
     "super earth": "Humans",
@@ -32,7 +32,7 @@ FACTION_ALIASES: dict[str, str] = {
 FACTION_CN: dict[str, str] = {
     "Terminids": "终结族",
     "Automaton": "机器人",
-    "Illuminate": "光能族",
+    "Illuminate": "光能者",
     "Humans": "人类",
     "Super Earth": "超级地球",
 }
@@ -99,6 +99,69 @@ def planet_health_pct(planet: dict[str, Any]) -> float | None:
         return max(0.0, min(100.0, float(health) / max_health * 100.0))
     except (TypeError, ValueError):
         return None
+
+
+def regions_liberation_pct(planet: dict[str, Any]) -> float | None:
+    """区域模式下的解放进度（0-100）。
+
+    上游 API 改版后星球主战场恒满血，真实进度在 planet.regions 数组。
+    聚合公式：sum(max-health) / sum(max)，无 regions 时返回 None。
+    health 为 null 的 region 视为未开放（跳过），不能当 0 算成已解放。
+    """
+    regions = planet.get("regions")
+    if not isinstance(regions, list) or not regions:
+        return None
+    total_max = 0.0
+    total_health = 0.0
+    for region in regions:
+        if not isinstance(region, dict):
+            continue
+        raw_health = region.get("health")
+        if raw_health is None:
+            continue  # 未开放区域：无血量数据，不计入聚合
+        try:
+            max_health = float(region.get("maxHealth") or 0)
+            health = float(raw_health)
+        except (TypeError, ValueError):
+            continue
+        if max_health <= 0:
+            continue
+        total_max += max_health
+        total_health += max(0.0, min(max_health, health))
+    if total_max <= 0:
+        return None
+    return max(0.0, min(100.0, (1.0 - total_health / total_max) * 100.0))
+
+
+def planet_liberation_pct(planet: dict[str, Any]) -> float | None:
+    """星球解放进度（0-100），event/regions 优先，兼容旧版主战场血量。
+
+    API 改版过渡期两种模式并存：主战场血量损耗（旧）与 regions 聚合（新）
+    都衡量距解放的距离，取最大值保证进度显示不倒退。
+    """
+    event = (
+        planet.get("event") if isinstance(planet.get("event"), dict) else None
+    )
+    if event:
+        try:
+            eh = event.get("health")
+            em = event.get("maxHealth")
+            if eh is not None and em and float(em) > 0:
+                return max(
+                    0.0, min(100.0, (1.0 - float(eh) / float(em)) * 100.0)
+                )
+        except (TypeError, ValueError):
+            pass
+    candidates: list[float] = []
+    rp = regions_liberation_pct(planet)
+    if rp is not None:
+        candidates.append(rp)
+    hp = planet_health_pct(planet)
+    if hp is not None:
+        candidates.append(100.0 - hp)
+    if not candidates:
+        return None
+    return max(candidates)
 
 
 def event_faction(event: dict[str, Any] | None) -> str:
@@ -511,23 +574,14 @@ class WarState:
 def campaign_progress_pct(campaign: dict[str, Any]) -> float | None:
     """战役进度百分比（0-100）。
 
-    - 有 event：用 event health（已推进 = 1 - remain/max）
-    - 无 event 进攻：用星球 health 损失比例
+    优先 event，其次 planet.regions 聚合（API 改版后主战场恒满血），
+    兼容旧版主战场血量损耗，取最大值避免过渡期进度倒退。
     """
     p = campaign_planet(campaign) or {}
-    event = p.get("event") if isinstance(p.get("event"), dict) else None
     try:
-        if event:
-            eh = event.get("health")
-            em = event.get("maxHealth")
-            if eh is not None and em:
-                em = float(em)
-                if em > 0:
-                    return max(0.0, min(100.0, (1.0 - float(eh) / em) * 100.0))
-        hp = planet_health_pct(p)
-        if hp is not None:
-            # 解放进度 ≈ 失去的生命
-            return max(0.0, min(100.0, 100.0 - hp))
+        result = planet_liberation_pct(p)
+        if result is not None:
+            return result
     except (TypeError, ValueError):
         return None
     return None

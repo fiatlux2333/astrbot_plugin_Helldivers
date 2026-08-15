@@ -4,7 +4,7 @@
 
 为群聊提供银河战争总览、战争统计、重要指令、Companion 中文网页截图、民主空间站、星球详情、银河战争地图、Steam 公告、Wiki 查询与“银河快报”自动推送。
 
-当前版本：`v1.8.6`
+当前版本：`v1.8.7`
 
 > **为了超级地球，为了管理式民主。**
 
@@ -18,8 +18,8 @@
 
 ### 🎮 游戏数据查询
 
-- **银河战争总览** (`/dashboard`) - GWW 风格分块战况面板
-- **银河战争统计** (`/hd2stats`) - 在线兵力分布与详细战争数据
+- **银河战争总览** (`/dashboard`) - GWW 风格分块战况面板，每次查询直调社区 API 实时刷新
+- **银河战争统计** (`/hd2stats`) - 在线兵力分布与详细战争数据，每次查询直调社区 API 实时刷新
 - **重要指令** (`/order` `/major_order`) - 当前活跃的 Major Order 广播卡
 - **个人指令** (`/personal_order` `/po`) - 默认使用 Companion 社区 JSON 源，校验快照新鲜度并校正剩余时间
 - **最新新闻** (`/hd2news`) - 聚焦、翻译并截取 Companion 最新新闻；翻译失败时优先返回上次翻译快照，无快照则返回英文截图，截图本身失败才降级本地卡片
@@ -30,7 +30,8 @@
 - **星球详情** (`/planet <名称或编号>`) - 翻译 Companion 完整星球页面与文字情报；翻译不完整时优先返回上次翻译快照，无快照则返回部分翻译截图，绝不降级
 - **Companion 首页** (`/companion`) - 截取 Companion 首页整屏并翻译；翻译不完整时优先返回上次翻译快照，无快照则返回部分翻译截图，可选显示更多战役卡片
 - **全球事件** (`/global_events`) - 当前活跃事件简报
-- **Wiki 查询** (`/wiki <关键词>`) - Helldivers Wiki 词条搜索与摘要
+- **Wiki 查询** (`/wiki <关键词> [-f]`) - Helldivers Wiki 词条搜索与摘要；中文自动按官方译名转英文搜索，`-f` 返回全文
+- **知识库检索** (`/kb [关键词] [库名]`) - 检索 AstrBot 知识库；无参数列出全部知识库
 
 ### 📡 银河快报
 
@@ -275,8 +276,8 @@ Cookie 属于敏感登录凭据，不要发送给他人或提交到仓库。插�
 ### 游戏数据查询
 
 ```text
-/dashboard                         银河战争总览
-/hd2stats                          银河战争统计
+/dashboard                         银河战争总览（实时数据）
+/hd2stats                          银河战争统计（实时数据）
 /order  或 /major_order            当前重要指令
 /personal_order 或 /po             当前个人指令
 /hd2news                           Companion 最新新闻截图
@@ -288,8 +289,9 @@ Cookie 属于敏感登录凭据，不要发送给他人或提交到仓库。插�
 /planet <名称、编号、slug或链接>    Companion 星球详情；失败时提示重试
 /hd2refresh 或 /刷新缓存             强制刷新 Companion 截图缓存
 /global_events                     全球事件
-/wiki <关键词>                     Helldivers Wiki 查询
-/hd2  或 /help                     插件简短帮助
+/wiki <关键词> [-f]              Helldivers Wiki 查询；-f 返回全文；中文自动按官方译名搜索
+/kb [关键词] [库名]              AstrBot 知识库检索（无参数列出全部知识库）
+/hd2                              插件简短帮助
 /hd2help 或 /hdhelp               插件全部指令说明
 ```
 
@@ -298,7 +300,7 @@ Cookie 属于敏感登录凭据，不要发送给他人或提交到仓库。插�
 ```text
 Terminids / 终结族
 Automaton / 机器人
-Illuminate / 光能族
+Illuminate / 光能者
 ```
 
 ### 银河快报

@@ -153,11 +153,37 @@ def _row_liberation(row: Mapping[str, Any]) -> float:
     )
     if value is not None:
         return max(0.0, min(100.0, _finite_float(value)))
+    planet = _nested(row, "planet")
+    candidates: list[float] = []
+    # API 改版后星球主战场恒满血，真实进度在 planet.regions 数组
+    if planet:
+        regions = planet.get("regions")
+        if isinstance(regions, list) and regions:
+            total_max = 0.0
+            total_health = 0.0
+            for region in regions:
+                if not isinstance(region, dict):
+                    continue
+                maximum = _optional_float(region.get("maxHealth"))
+                health = _optional_float(region.get("health"))
+                if maximum is None or health is None or maximum <= 0:
+                    continue
+                total_max += maximum
+                total_health += max(0.0, min(maximum, health))
+            if total_max > 0:
+                candidates.append(
+                    max(0.0, min(100.0, (1.0 - total_health / total_max) * 100.0))
+                )
     source = _nested(row, "event") or _nested(row, "planet")
     health = _optional_float(source.get("health"))
     maximum = _optional_float(source.get("maxHealth") or source.get("max_health"))
     if health is not None and maximum is not None and maximum > 0:
-        return max(0.0, min(100.0, (1.0 - health / maximum) * 100.0))
+        candidates.append(
+            max(0.0, min(100.0, (1.0 - health / maximum) * 100.0))
+        )
+    if candidates:
+        # 过渡期 regions 与旧主战场血量并存，取最大值避免进度倒退
+        return max(candidates)
     return 0.0
 
 
@@ -277,7 +303,7 @@ def _normalize_faction(faction: str | None) -> str:
         "机器人": "Automaton",
         "illuminate": "Illuminate",
         "squids": "Illuminate",
-        "光能族": "Illuminate",
+        "光能者": "Illuminate",
         "humans": "Humans",
         "human": "Humans",
         "super earth": "Super Earth",
@@ -667,7 +693,7 @@ def render_warfront(
         "Humans": "超级地球",
         "Terminids": "终结族",
         "Automaton": "机器人",
-        "Illuminate": "光能族",
+        "Illuminate": "光能者",
         "Unknown": "未知阵营",
     }.get(selected_faction, selected_faction)
     heading = title or f"{faction_label}战线"

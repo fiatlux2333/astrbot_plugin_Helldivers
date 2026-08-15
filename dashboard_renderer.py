@@ -293,7 +293,7 @@ class DashboardRenderer:
         for faction, title in (
             ("Automaton", "进攻中 · 机器人"),
             ("Terminids", "进攻中 · 终结族"),
-            ("Illuminate", "进攻中 · 光能族"),
+            ("Illuminate", "进攻中 · 光能者"),
         ):
             block = attacking.get(faction) or {}
             main = list(block.get("main") or [])[:8]

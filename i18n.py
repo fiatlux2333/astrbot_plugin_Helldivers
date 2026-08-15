@@ -328,7 +328,7 @@ ZH_CN: Final[ZhCNLabels] = {
     # Factions
     "faction.terminids": "终结族",
     "faction.automaton": "机器人",
-    "faction.illuminate": "光能族",
+    "faction.illuminate": "光能者",
     "faction.humans": "人类",
     "faction.super_earth": "超级地球",
     # Trend outcomes
@@ -383,7 +383,7 @@ _FACTION_ALIASES: Final[dict[str, LabelKey]] = {
     "illuminates": "faction.illuminate",
     "squids": "faction.illuminate",
     "光能": "faction.illuminate",
-    "光能族": "faction.illuminate",
+    "光能者": "faction.illuminate",
     "humans": "faction.humans",
     "human": "faction.humans",
     "super earth": "faction.super_earth",

@@ -116,6 +116,63 @@ def _merged_terms() -> dict[str, str]:
 
 
 @lru_cache(maxsize=1)
+def reverse_terms() -> dict[str, str]:
+    """Inverted ``{中文: 英文}`` mapping for Chinese → English query translation.
+
+    Built from :func:`_merged_terms` (so model-stripped stratagem aliases work in
+    both directions). On collision the longest Chinese key wins, which is safe
+    because the forward tables have no duplicate values.
+    """
+
+    reversed_map: dict[str, str] = {}
+    for en, zh in _merged_terms().items():
+        zh = zh.strip()
+        if zh and zh not in reversed_map:
+            reversed_map[zh] = en
+    return reversed_map
+
+
+def contains_cjk(text: str) -> bool:
+    """True if ``text`` contains any CJK ideograph (used for wiki query routing)."""
+
+    return bool(text and re.search(r"[\u4e00-\u9fff]", text))
+
+
+def translate_query(query: str) -> str | None:
+    """Translate a Chinese query to English wiki search terms via the glossary.
+
+    Matching strategy (first hit wins):
+    1. Exact ``中文 → 英文`` lookup (e.g. ``磁轨炮`` → ``rs-422 railgun``).
+    2. Longest-first containment: extract every glossary Chinese term that
+       appears inside the query (``轨道炮攻击怎么用`` contains ``轨道炮攻击``)
+       and return the matched English terms joined by spaces.
+
+    Returns ``None`` when nothing matched — caller keeps the original query.
+    """
+
+    query = (query or "").strip()
+    if not query:
+        return None
+    table = reverse_terms()
+    exact = table.get(query)
+    if exact:
+        return exact
+    # Longest Chinese keys first so 轨道炮攻击 wins over shorter overlaps.
+    matched: list[str] = []
+    consumed = query
+    for zh in sorted(table, key=len, reverse=True):
+        if zh in consumed:
+            matched.append(table[zh])
+            consumed = consumed.replace(zh, " ")
+    if matched:
+        # Deduplicate while preserving order.
+        seen: set[str] = set()
+        ordered = [t for t in matched if not (t in seen or seen.add(t))]
+        return " ".join(ordered)
+    return None
+
+
+@lru_cache(maxsize=1)
 def _preapply_pattern() -> re.Pattern[str] | None:
     """Compile a single longest-match-first regex covering every known term.
 
@@ -167,6 +224,9 @@ __all__ = [
     "SECTOR_NAMES",
     "STRATAGEM_NAMES",
     "all_terms",
+    "contains_cjk",
     "lookup_term",
     "preapply_glossary",
+    "reverse_terms",
+    "translate_query",
 ]

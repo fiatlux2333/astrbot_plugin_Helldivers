@@ -57,7 +57,7 @@ from .stats_model import build_stats_view_model
 from .stats_renderer import StatsRenderer
 from .steam_parser import ParsedSteamContent, SteamBlock, parse_steam_content
 from .text_utils import clean_game_text
-from .glossary import preapply_glossary
+from .glossary import contains_cjk, preapply_glossary, translate_query
 from .steam_renderer import SteamRenderer
 from .translator import TranslationCache, TranslationService
 from .war_state import WarState, normalize_faction, planet_index, planet_name
@@ -381,7 +381,16 @@ class HelldiversService:
 
         return datetime.now().strftime("更新 %m-%d %H:%M")
 
-    async def get_stats_images(self) -> list[Path]:
+    async def get_stats_images(self, *, realtime: bool = False) -> list[Path]:
+        if realtime:
+            await self._refresh_realtime(
+                [
+                    self.CACHE_WAR_SUMMARY,
+                    self.CACHE_WAR_V1,
+                    self.CACHE_PLANETS,
+                    self.CACHE_WAR_STATUS,
+                ]
+            )
         summary = await self.cache.get_or_refresh(self.CACHE_WAR_SUMMARY)
         war_v1 = await self.cache.get_or_refresh(self.CACHE_WAR_V1)
         planets = await self.cache.get_or_refresh(self.CACHE_PLANETS)
@@ -958,7 +967,7 @@ class HelldiversService:
         )
         return final
 
-    async def get_wiki_message(self, query: str) -> str:
+    async def get_wiki_message(self, query: str, *, full: bool = False) -> str:
         if not self.enable_wiki:
             return "❌ Wiki 查询已在配置中关闭（enable_wiki=false）。"
         if self.wiki_client is None:
@@ -968,9 +977,27 @@ class HelldiversService:
         if not query:
             return WIKI_USAGE
 
+        # 中文查询先经官方词表翻译成英文（wiki 是英文站，直接发中文会命中无关页）
+        original_query = query
+        translated_note = ""
+        if contains_cjk(query):
+            english = translate_query(query)
+            if english and english.strip().lower() != query.lower():
+                query = english.strip()
+                translated_note = f"（已按官方译名转换为：{query}）"
+            elif not english:
+                # 词表没覆盖的中文词：搜索结果相关性不可信，直接提示用法
+                return (
+                    f"❓ 未在官方译名词表中找到“{original_query}”。\n"
+                    "中文搜索依赖官方译名词表（战备/敌人/星球等 500+ 条），"
+                    "请换用英文关键词重试，例如：\n"
+                    "· /wiki railgun\n"
+                    "· /wiki Bile Titan"
+                )
+
         try:
-            # 先尝试把查询当标题直接取摘要（精确/接近）
-            direct = await self.wiki_client.get_page_summary(query)
+            # 直接标题命中（仅英文词面；CJK 查询已在上方翻译成英文）
+            direct = await self.wiki_client.get_page_summary(query, full=full)
             if direct and direct.get("extract"):
                 extract = await self._translate_wiki_extract(
                     str(direct.get("title") or query),
@@ -980,6 +1007,8 @@ class HelldiversService:
                     title=str(direct.get("title") or query),
                     extract=extract,
                     url=str(direct.get("url") or self.wiki_client.page_url(query)),
+                    note=translated_note,
+                    full=full,
                 )
 
             results = await self.wiki_client.search(query)
@@ -992,7 +1021,7 @@ class HelldiversService:
 
             best = self.wiki_client.pick_best_title(query, results)
             if best:
-                page = await self.wiki_client.get_page_summary(best)
+                page = await self.wiki_client.get_page_summary(best, full=full)
                 if page:
                     extract = await self._translate_wiki_extract(
                         str(page.get("title") or best),
@@ -1002,6 +1031,8 @@ class HelldiversService:
                         title=str(page.get("title") or best),
                         extract=extract,
                         url=str(page.get("url") or self.wiki_client.page_url(best)),
+                        note=translated_note,
+                        full=full,
                     )
 
             # 多候选：列表展示
@@ -1016,7 +1047,24 @@ class HelldiversService:
 
     # ---- GWW-style war queries ----
 
-    async def _build_war_state(self) -> WarState:
+    async def _refresh_realtime(self, names: list[str]) -> None:
+        """强制刷新指定缓存键（绕过 TTL），用于实时命令。
+
+        refresh_one(force=True) 请求失败时不会覆盖缓存，天然回退旧数据。
+        """
+        for name in names:
+            await self.cache.refresh_one(name, force=True)
+
+    async def _build_war_state(self, *, realtime: bool = False) -> WarState:
+        if realtime:
+            await self._refresh_realtime(
+                [
+                    self.CACHE_PLANETS,
+                    self.CACHE_CAMPAIGNS,
+                    self.CACHE_WAR_V1,
+                    self.CACHE_WAR_STATUS,
+                ]
+            )
         planets = await self.cache.get_or_refresh(self.CACHE_PLANETS)
         campaigns = await self.cache.get_or_refresh(self.CACHE_CAMPAIGNS)
         events = await self.cache.get_or_refresh(self.CACHE_PLANET_EVENTS)
@@ -1473,8 +1521,8 @@ class HelldiversService:
                 if replacement is not None:
                     container[index] = replacement
 
-    async def get_dashboard_image(self) -> list[Path]:
-        state = await self._build_war_state()
+    async def get_dashboard_image(self, *, realtime: bool = False) -> list[Path]:
+        state = await self._build_war_state(realtime=realtime)
         if not state.campaigns and not state.planets:
             return []
         sections = state.dashboard_sections(
@@ -1518,13 +1566,13 @@ class HelldiversService:
         if not faction:
             return (
                 "❌ 用法: /warfront <阵营>\n"
-                "可选: Terminids/Automaton/Illuminate（终结族/机器人/光能族）"
+                "可选: Terminids/Automaton/Illuminate（终结族/机器人/光能者）"
             )
         norm = normalize_faction(faction)
         if norm not in {"Terminids", "Automaton", "Illuminate"}:
             return (
                 "❌ 未知阵营。可选: Terminids / Automaton / Illuminate\n"
-                "中文: 终结族 / 机器人 / 光能族"
+                "中文: 终结族 / 机器人 / 光能者"
             )
         state = await self._build_war_state()
         if not state.campaigns and not state.planets:
@@ -1537,13 +1585,13 @@ class HelldiversService:
         if not faction:
             return (
                 "❌ 用法: /warfront <阵营>\n"
-                "可选: Terminids/Automaton/Illuminate（终结族/机器人/光能族）",
+                "可选: Terminids/Automaton/Illuminate（终结族/机器人/光能者）",
                 [],
             )
         norm = normalize_faction(faction)
         if norm not in {"Terminids", "Automaton", "Illuminate"}:
             return (
-                "❌ 未知阵营。可选: Terminids / Automaton / Illuminate\n中文: 终结族 / 机器人 / 光能族",
+                "❌ 未知阵营。可选: Terminids / Automaton / Illuminate\n中文: 终结族 / 机器人 / 光能者",
                 [],
             )
         state = await self._build_war_state()
@@ -1558,7 +1606,7 @@ class HelldiversService:
             faction_label = {
                 "Terminids": "终结族",
                 "Automaton": "机器人",
-                "Illuminate": "光能族",
+                "Illuminate": "光能者",
                 "Humans": "超级地球",
             }.get(norm, norm)
             p = await asyncio.to_thread(

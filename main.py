@@ -77,8 +77,8 @@ HELP_TEXT = """\
 Helldivers 2 银河战争 {version}
 ━━━━━━━━━━━━━━━━━━━━
 【战况 · 图片卡片】
-/dashboard          银河战争总览（GWW 风格）
-/hd2stats           银河战争详细统计
+/dashboard          银河战争总览（实时数据）
+/hd2stats           银河战争详细统计（实时数据）
 /major_order        主要任务（同 /order）
 /personal_order     个人任务
 /map                战争地图（阵营领土）
@@ -90,68 +90,51 @@ Helldivers 2 银河战争 {version}
 /planet <名称/编号> 星球详情
 /steam              Steam 新闻图片
 【文本】
-/wiki <关键词>      Helldivers Wiki
+/wiki <关键词>      Helldivers Wiki（-f 查看全文）
+/kb <关键词>        AstrBot 知识库检索
 /银河快报           立即获取最新一期银河快报
 /hd2help           全部指令说明
-/hd2 或 /help       简短帮助
+/hd2               简短帮助
 ━━━━━━━━━━━━━━━━━━━━
 阵营: Terminids/Automaton/Illuminate
-     （终结族/机器人/光能族）
+     （终结族/机器人/光能者）
 数据: api.helldivers2.dev · wiki.gg
 为了超级地球！🌍""".format(version=PLUGIN_VERSION)
 
 HDHELP_TEXT = """\
 绝地潜兵2情报助手 {version} · 全部指令
 ━━━━━━━━━━━━━━━━━━━━
-【核心战况】
-/dashboard
-  银河战争总览。按防御、解放、重点战线整理当前局势，适合群里快速决定去哪打。
-/hd2stats
-  银河战争统计。显示在线人数、任务时间、击杀、阵亡、命中率等整体数据。
-/order 或 /major_order
-  当前最高指令。返回中文任务卡，包含目标、进度和剩余时间。
-/personal_order 或 /po
-  当前个人指令。默认读取 Companion 社区源，校验快照时间并修正剩余倒计时。
+【核心战况 · 实时数据】
+/dashboard          银河战争总览（防御/解放/重点战线）
+/hd2stats           在线人数、击杀、命中率等统计
+/order              当前最高指令任务卡
+/po                 当前个人指令
 
-【Companion 网页截图】
-/hd2news
-  截取 Helldivers Companion 最新新闻，优先翻译网页文字；失败时提示重试。
-/companion
-  截取 Helldivers Companion 首页整屏，自动翻译可见英文文案。
-/dss
-  截取民主空间站主面板并附中文摘要；文字摘要不重复输出战术行动。
-/planet <名称、编号、slug或链接>
-  查询单个星球详情。支持中文名、英文名、编号、slug 和 Companion 星球链接。
-/hd2refresh 或 /刷新缓存
-  强制刷新 Companion 截图缓存，跳过缓存重新截图和翻译。
+【Companion 截图】
+/hd2news            最新新闻（截图+翻译）
+/companion          Companion 首页
+/dss                民主空间站面板+摘要
+/planet <名称/编号>  星球详情（支持中文名和链接）
+/hd2refresh         强制刷新截图缓存
 
 【地图与战线】
-/map
-  生成银河战争地图，标注阵营控制区、活跃星球和战役节点。
-/warfront <阵营>
-  查看指定阵营战线 Top 10。阵营可填 Terminids/Automaton/Illuminate 或中文名。
-/global_events 或 /events
-  查看当前全球事件，包含事件目标、阵营和结束时间。
+/map                银河战争地图
+/warfront <阵营>     阵营战线 Top 10
+/events             全球事件
 
 【外部资讯】
-/steam
-  获取 Steam 官方更新、公告或补丁说明图片。
-/wiki <关键词>
-  查询 Helldivers Wiki 词条摘要，可按配置自动翻译。
-/银河快报 或 /galaxy_news
-  手动获取最近一期 B站银河快报图文。
-/银河快报订阅
-  在当前群订阅银河快报自动推送。
-/银河快报退订
-  取消当前群的银河快报推送。
+/steam              Steam 更新公告
+/wiki <关键词>       Wiki 查询（中文自动译名；加 -f 看全文）
+/kb <关键词>         知识库检索（无参数列出全部库）
+/银河快报            最新一期快报
+/银河快报订阅/退订    群推送开关
 
 【帮助】
-/hd2 或 /help
-  简短帮助。
-/hd2help 或 /hdhelp
-  当前这份完整指令说明。
+/hd2                简短帮助
+/hd2help            本说明
 ━━━━━━━━━━━━━━━━━━━━
-为了超级地球，为了管理式民主。""".format(version=PLUGIN_VERSION)
+阵营: 终结族/机器人/光能者
+为了超级地球！🌍""".format(version=PLUGIN_VERSION)
 
 
 def _strip_cmd(text: str, names: set[str]) -> list[str]:
@@ -406,6 +389,9 @@ class HelldiversPlugin(Star):
                 proxy_url=str(self._cfg("proxy_url", "") or ""),
                 search_limit=int(self._cfg("wiki_search_limit", 5) or 5),
                 extract_chars=int(self._cfg("wiki_extract_chars", 900) or 900),
+                full_extract_chars=int(
+                    self._cfg("wiki_full_extract_chars", 3000) or 3000
+                ),
                 prefer_hd2=bool(self._cfg("wiki_prefer_hd2", True)),
                 retry_max_attempts=int(self._cfg("retry_max_attempts", 3) or 3),
                 retry_base_delay=float(self._cfg("retry_base_delay", 2.0) or 2.0),
@@ -711,12 +697,24 @@ class HelldiversPlugin(Star):
             )
             return
         text = post.text or "（该动态没有文字内容）"
+        # 预读图片字节：AstrBot 容器与 NapCat 宿主机分离部署时，
+        # file:/// 路径跨进程不可读，直接内嵌 base64 绕过文件系统。
+        image_bytes: list[bytes] = []
+        for path in image_paths:
+            try:
+                image_bytes.append(path.read_bytes())
+            except OSError as exc:
+                logger.warning(
+                    "[HD2] Bilibili image unreadable: path=%s error=%s",
+                    path,
+                    exc,
+                )
         delivered = 0
         for unified_msg_origin in sessions:
             try:
                 chain = MessageChain().message(f"【{post.author}】\n{text}")
-                for path in image_paths:
-                    chain.file_image(str(path))
+                for data in image_bytes:
+                    chain.chain.append(Image.fromBytes(data))
                 chain.message(f"\n原动态：{post.url}")
                 await self.context.send_message(
                     unified_msg_origin,
@@ -776,7 +774,13 @@ class HelldiversPlugin(Star):
                 return
             paths = await monitor.download_images(post)
             components: list[Any] = [Plain(f"【{post.author}】\n{post.text}")]
-            components.extend(Image.fromFileSystem(str(path)) for path in paths)
+            for path in paths:
+                try:
+                    components.append(Image.fromBytes(path.read_bytes()))
+                except OSError as exc:
+                    logger.warning(
+                        f"[HD2] galaxy news image unreadable: {path} error={exc}"
+                    )
             components.append(Plain(f"\n原动态：{post.url}"))
             yield event.chain_result(components)
         except (BilibiliAuthenticationError, BilibiliRiskControlError) as e:
@@ -829,7 +833,7 @@ class HelldiversPlugin(Star):
         else:
             yield event.plain_result("ℹ️ 本群尚未订阅银河快报。")
 
-    @filter.command("hd2", alias={"helldivers", "help"})
+    @filter.command("hd2", alias={"helldivers"})
     @_command_handler
     async def cmd_help(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
         """Helldivers 2 插件帮助"""
@@ -894,9 +898,9 @@ class HelldiversPlugin(Star):
     @filter.command("hd2stats")
     @_command_handler
     async def cmd_stats(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
-        """查看当前银河战争实时统计（图片）"""
+        """查看当前银河战争实时统计（图片，直调社区 API）"""
         try:
-            paths = await self._svc().get_stats_images()
+            paths = await self._svc().get_stats_images(realtime=True)
         except Exception as e:
             logger.exception(f"[HD2] /hd2stats error: {e}")
             yield event.plain_result("❌ 获取银河战争统计失败，请稍后重试。")
@@ -1022,15 +1026,81 @@ class HelldiversPlugin(Star):
     @filter.command("wiki", alias={"维基", "百科"})
     @_command_handler
     async def cmd_wiki(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
-        """查询 Helldivers Wiki，用法: /wiki <关键词>"""
+        """查询 Helldivers Wiki，用法: /wiki <关键词> [-f 全文]"""
         args = _strip_cmd(event.message_str or "", {"wiki", "维基", "百科"})
+        # -f / --full 开关：返回全文而不是摘要
+        full = False
+        if "-f" in args or "--full" in args:
+            full = True
+            args = [a for a in args if a not in ("-f", "--full")]
         query = " ".join(args).strip()
         try:
-            msg = await self._svc().get_wiki_message(query)
+            msg = await self._svc().get_wiki_message(query, full=full)
         except Exception as e:
             logger.exception(f"[HD2] /wiki error: {e}")
             msg = "❌ Wiki 查询失败，请稍后重试。"
         yield event.plain_result(msg)
+
+    @filter.command("kb", alias={"知识库"})
+    @_command_handler
+    async def cmd_kb(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
+        """查询 AstrBot 知识库。/kb 列出全部；/kb <关键词> [库名...] 检索"""
+        args = _strip_cmd(event.message_str or "", {"kb", "知识库"})
+        query = " ".join(args).strip()
+        kb_manager = getattr(self.context, "kb_manager", None)
+        if kb_manager is None:
+            yield event.plain_result("❌ 当前 AstrBot 版本不支持知识库接口。")
+            return
+        try:
+            kbs = await kb_manager.list_kbs()
+            if not kbs:
+                yield event.plain_result(
+                    "ℹ️ AstrBot 上还没有任何知识库。\n"
+                    "可在 AstrBot WebUI「知识库」页面创建并上传文档。"
+                )
+                return
+            if not query:
+                lines = ["📚 AstrBot 知识库列表", "-------------"]
+                for kb in kbs:
+                    name = getattr(kb, "kb_name", None) or "?"
+                    desc = (getattr(kb, "description", "") or "").strip()
+                    lines.append(f"▎{name}" + (f" — {desc}" if desc else ""))
+                lines.append("-------------")
+                lines.append("用法: /kb <关键词> [库名...]（默认检索全部库）")
+                yield event.plain_result("\n".join(lines))
+                return
+
+            parts = query.split()
+            # 末尾若出现已知库名则视为指定库，否则检索全部
+            kb_names = [getattr(k, "kb_name", "") for k in kbs]
+            selected: list[str] = []
+            while len(parts) > 1 and parts[-1] in kb_names:
+                selected.insert(0, parts.pop())
+            query = " ".join(parts)
+
+            result = await kb_manager.retrieve(query, selected or kb_names)
+            if not result or not result.get("results"):
+                yield event.plain_result(
+                    f"ℹ️ 知识库中没有找到与“{query}”相关的内容。"
+                )
+                return
+            chunks = result["results"][:5]
+            lines = [f"📚 知识库检索 | {query}", "-------------"]
+            for i, chunk in enumerate(chunks, 1):
+                score = float(chunk.get("score") or 0.0)
+                content = str(chunk.get("content") or "").strip()
+                if len(content) > 300:
+                    content = content[:297] + "..."
+                lines.append(f"[{i}] {chunk.get('doc_name')} ({score:.2f})")
+                lines.append(f"▎{content}")
+                lines.append("")
+            lines.append(f"共 {len(result['results'])} 条命中，显示前 {len(chunks)} 条")
+            yield event.plain_result("\n".join(lines).strip())
+        except ValueError as e:
+            yield event.plain_result(f"❌ {e}")
+        except Exception as e:
+            logger.exception(f"[HD2] /kb error: {e}")
+            yield event.plain_result("❌ 知识库检索失败，请稍后重试。")
 
     @filter.command("personal_order", alias={"个人任务", "po"})
     @_command_handler
@@ -1080,9 +1150,9 @@ class HelldiversPlugin(Star):
     @filter.command("dashboard", alias={"总览", "战况总览"})
     @_command_handler
     async def cmd_dashboard(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
-        """银河战争总览 Dashboard（图片）"""
+        """银河战争总览 Dashboard（图片，直调社区 API）"""
         try:
-            paths = await self._svc().get_dashboard_image()
+            paths = await self._svc().get_dashboard_image(realtime=True)
         except Exception as e:
             logger.exception(f"[HD2] /dashboard error: {e}")
             yield event.plain_result("❌ 获取战争总览失败，请稍后重试。")

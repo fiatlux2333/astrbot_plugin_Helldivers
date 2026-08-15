@@ -563,8 +563,12 @@ class BilibiliMonitor:
                         f"[HD2] Bilibili image cache rejected {url}: {exc}"
                     )
                     continue
-                if path is not None:
+                if path is not None and path.is_file() and path.stat().st_size > 0:
                     paths.append(path)
+                elif path is not None:
+                    self.log_warning(
+                        f"[HD2] Bilibili image missing or empty on disk: {path}"
+                    )
             return paths
 
         self.image_dir.mkdir(parents=True, exist_ok=True)

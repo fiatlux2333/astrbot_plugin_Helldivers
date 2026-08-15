@@ -229,7 +229,11 @@
     "description": "翻译模式",
     "type": "string",
     "hint": "builtin=第三方翻译接口；openai=OpenAI 兼容 chat/completions；auto=按地址和 Key 自动判断",
-    "options": ["auto", "builtin", "openai"],
+    "options": [
+      "auto",
+      "builtin",
+      "openai"
+    ],
     "default": "auto"
   },
   "translation_api_url": {
@@ -357,6 +361,12 @@
     "type": "int",
     "default": 900
   },
+  "wiki_full_extract_chars": {
+    "description": "Wiki 全文模式最大字符数（/wiki 关键词 -f）",
+    "type": "int",
+    "hint": "建议 2000–4000",
+    "default": 3000
+  },
   "wiki_prefer_hd2": {
     "description": "优先 Helldivers 2 词条（过滤 Helldivers 1: 前缀）",
     "type": "bool",
@@ -397,7 +407,10 @@
   "map_visual_mode": {
     "description": "地图视觉模式",
     "type": "string",
-    "options": ["uploaded_reference", "derived"],
+    "options": [
+      "uploaded_reference",
+      "derived"
+    ],
     "hint": "uploaded_reference 使用上传的 map.png 作为圆形银河基底；derived 使用程序化地图",
     "default": "uploaded_reference"
   },

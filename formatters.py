@@ -87,7 +87,7 @@ def format_stats_message(
             "⚔️战斗统计",
             f"▎终结族击杀: {format_number(terminid_kills)}",
             f"▎机器人击杀: {format_number(automaton_kills)}",
-            f"▎光能族击杀: {format_number(illuminate_kills)}",
+            f"▎光能者击杀: {format_number(illuminate_kills)}",
             f"▎阵亡次数: {format_number(deaths)}",
             f"▎TK伤亡: {format_number(friendlies)}",
             "-------------",
@@ -346,20 +346,27 @@ def format_wiki_summary(
     extract: str,
     url: str,
     source: str = "helldivers.wiki.gg",
+    note: str = "",
+    full: bool = False,
 ) -> str:
     try:
         body = (
             clean_game_text(extract or "").strip()
             or "（暂无摘要，请打开链接查看完整内容）"
         )
+        header = f"📖 Wiki{' 全文' if full else ''} | {title}"
+        if note:
+            header += f" {note}"
         lines = [
-            f"📖 Wiki | {title}",
+            header,
             "-------------",
-            f"▎摘要: {body}",
+            f"▎{'全文' if full else '摘要'}: {body}",
             "-------------",
             f"🔗 {url}",
             f"来源: {source}",
         ]
+        if not full:
+            lines.append("提示: 加 -f 可查看全文，如 /wiki 磁轨炮 -f")
         return "\n".join(lines)
     except Exception:
         logger.exception("[HD2] Wiki 摘要格式化失败")
@@ -412,11 +419,13 @@ def format_wiki_search_results(
 WIKI_USAGE = """\
 📖 Wiki 查询用法
 -------------
-/wiki <关键词>     搜索并查看词条摘要
+/wiki <关键词>       搜索并查看词条摘要
+/wiki <关键词> -f    查看词条全文
+支持中英文关键词（中文自动按官方译名搜索）
 例如:
   /wiki Railgun
-  /wiki 轨道炮
-  /wiki Bile Titan
+  /wiki 磁轨炮
+  /wiki Bile Titan -f
 -------------
 资料来源: helldivers.wiki.gg"""
 
@@ -464,6 +473,7 @@ def format_planet_message(planet: dict[str, Any]) -> str:
             faction_cn,
             planet_health_pct,
             planet_index,
+            planet_liberation_pct,
             planet_name,
             planet_owner,
             planet_players,
@@ -500,6 +510,9 @@ def format_planet_message(planet: dict[str, Any]) -> str:
         ]
         if hp is not None:
             lines.append(f"▎生命值: {hp:.1f}%")
+        lib = planet_liberation_pct(planet)
+        if lib is not None:
+            lines.append(f"▎解放进度: {lib:.1f}%")
         if biome:
             lines.append(f"▎生物群系: {biome}")
         if hazard_names:
@@ -547,8 +560,8 @@ def format_planet_candidates(query: str, planets: list[dict[str, Any]]) -> str:
 def format_warfront_message(faction: str, campaigns: list[dict[str, Any]]) -> str:
     from .war_state import (
         campaign_planet,
+        campaign_progress_pct,
         faction_cn,
-        planet_health_pct,
         planet_name,
         planet_players,
     )
@@ -581,9 +594,10 @@ def format_warfront_message(faction: str, campaigns: list[dict[str, Any]]) -> st
             p = campaign_planet(c) or {}
             name = planet_name(p)
             players = planet_players(p)
-            hp = planet_health_pct(p)
-            hp_s = f"{hp:.1f}%" if hp is not None else "N/A"
-            lines.append(f"▎{name}  进度:{hp_s}  在线:{format_number(players)}")
+            # 进度优先取 event/regions 聚合（API 改版后主战场恒满血）
+            prog = campaign_progress_pct(c)
+            prog_s = f"{prog:.1f}%" if prog is not None else "N/A"
+            lines.append(f"▎{name}  进度:{prog_s}  在线:{format_number(players)}")
         lines.append("-------------")
 
     _add_section("🛡️ 防御/事件", defence)

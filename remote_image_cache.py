@@ -54,6 +54,18 @@ ALLOWED_IMAGE_MIMES: Final[frozenset[str]] = frozenset(
 _REDIRECT_STATUSES: Final[frozenset[int]] = frozenset({301, 302, 303, 307, 308})
 
 
+def _ensure_readable(path: Path) -> None:
+    """确保缓存图片对跨容器/跨用户的 QQ 机器人可读。
+
+    NamedTemporaryFile 默认 0600，NapCat 等外部进程无权读取时 QQ 会报
+    rich media transfer failed。将权限统一修为 0o644。
+    """
+    try:
+        os.chmod(path, 0o644)
+    except OSError:
+        pass
+
+
 class RemoteImageError(RuntimeError):
     """Raised when a remote image fails validation or download."""
 
@@ -313,7 +325,14 @@ class RemoteImageCache:
             age = now - float(metadata.get("fetched_at") or 0)
             # TTL=0 统一表示「永不过期」（与 cached_path() 快路径保持一致）
             if self.cache_ttl == 0 or age <= self.cache_ttl:
-                return self._record(image_path, metadata, from_cache=True)
+                # 旧缓存可能是未压缩的 PNG（可达 33MB），QQ 发不出去。
+                # 文件超限时强制重新下载并用 JPEG 重新编码。
+                cached_bytes = int(metadata.get("bytes") or 0)
+                if cached_bytes > self.max_bytes:
+                    pass  # 落入下面的重新下载逻辑
+                else:
+                    _ensure_readable(image_path)
+                    return self._record(image_path, metadata, from_cache=True)
         if not force and negative_path.is_file():
             negative = self._read_json(negative_path)
             age = now - float((negative or {}).get("failed_at") or 0)
@@ -326,28 +345,68 @@ class RemoteImageCache:
         if response is None:
             if image_path.is_file() and metadata:
                 metadata["fetched_at"] = now
-                self._write_json_atomic(metadata_path, metadata)
                 negative_path.unlink(missing_ok=True)
+                # 304 Not Modified：服务器内容没变，但如果本地缓存是
+                # 旧版大体积 PNG（bytes > max_bytes），需要从磁盘读取
+                # 重新编码为 JPEG，否则 QQ 发不出去。
+                cached_bytes = int(metadata.get("bytes") or 0)
+                if cached_bytes > self.max_bytes:
+                    try:
+                        body = image_path.read_bytes()
+                        normalized, width, height, fmt = (
+                            await asyncio.to_thread(
+                                self._normalize_image, body
+                            )
+                        )
+                        ext = ".jpg" if fmt == "JPEG" else ".png"
+                        new_path = self.cache_dir / f"{key}{ext}"
+                        if new_path != image_path and image_path.is_file():
+                            image_path.unlink(missing_ok=True)
+                        image_path = new_path
+                        self._write_bytes_atomic(image_path, normalized)
+                        metadata.update(
+                            {
+                                "format": fmt,
+                                "mode": fmt,
+                                "bytes": len(normalized),
+                                "width": width,
+                                "height": height,
+                                "fetched_at": now,
+                            }
+                        )
+                        negative_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass  # 重新编码失败则退回旧文件
+                _ensure_readable(image_path)
+                self._write_json_atomic(metadata_path, metadata)
                 return self._record(image_path, metadata, from_cache=True)
             raise RemoteImageError(
                 "server returned not-modified without a cached image"
             )
 
         body, final_url, mime, etag, last_modified = response
-        normalized, width, height, mode = await asyncio.to_thread(
+        normalized, width, height, fmt = await asyncio.to_thread(
             self._normalize_image, body
         )
+        # 根据实际格式确定文件扩展名
+        ext = ".jpg" if fmt == "JPEG" else ".png"
+        new_image_path = self.cache_dir / f"{key}{ext}"
+        # 如果旧格式文件存在（比如之前是 .png，现在改 .jpg），先删除
+        if new_image_path != image_path and image_path.is_file():
+            image_path.unlink(missing_ok=True)
+        image_path = new_image_path
         self._write_bytes_atomic(image_path, normalized)
         stored = {
             "url": canonical,
             "final_url": final_url,
             "fetched_at": now,
             "mime": mime,
+            "format": fmt,
             "etag": etag,
             "last_modified": last_modified,
             "width": width,
             "height": height,
-            "mode": mode,
+            "mode": fmt,
             "bytes": len(normalized),
         }
         self._write_json_atomic(metadata_path, stored)
@@ -492,8 +551,24 @@ class RemoteImageCache:
                     )
                     mode = "RGBA" if has_alpha else "RGB"
                     normalized = source.convert(mode)
-                    output = BytesIO()
-                    normalized.save(output, format="PNG", optimize=True)
+                    output: BytesIO | None = None
+                    fmt = "PNG"
+                    # 有透明通道 → PNG；否则优先 JPEG（照片类图片体积小 10-50 倍）。
+                    # PNG 无损无压缩，32M 像素的照片可达 33MB，QQ 发不出去。
+                    if not has_alpha:
+                        output = BytesIO()
+                        normalized.save(output, format="JPEG", quality=90)
+                        fmt = "JPEG"
+                    # JPEG 仍超 max_bytes → 逐步降质量
+                    if output is not None and len(output.getvalue()) > self.max_bytes:
+                        for quality in (80, 70, 60, 50):
+                            output = BytesIO()
+                            normalized.save(output, format="JPEG", quality=quality)
+                            if len(output.getvalue()) <= self.max_bytes:
+                                break
+                    if output is None:
+                        output = BytesIO()
+                        normalized.save(output, format="PNG", optimize=True)
                     normalized.close()
         except (
             UnidentifiedImageError,
@@ -505,13 +580,14 @@ class RemoteImageCache:
             if isinstance(exc, RemoteImageError):
                 raise
             raise RemoteImageError("remote body is not a safe supported image") from exc
-        return output.getvalue(), width, height, mode
+        return output.getvalue(), width, height, fmt
 
     def _prune_cache(self, protected: Path | None = None) -> None:
         """按最久未修改顺序清理远程图片，保持磁盘缓存上限。"""
         try:
             images = sorted(
-                self.cache_dir.glob("*.png"),
+                list(self.cache_dir.glob("*.png"))
+                + list(self.cache_dir.glob("*.jpg")),
                 key=lambda path: path.stat().st_mtime,
             )
             total = sum(path.stat().st_size for path in images)
@@ -533,9 +609,19 @@ class RemoteImageCache:
         return hashlib.sha256(url.encode("utf-8")).hexdigest()
 
     def _paths(self, key: str) -> tuple[Path, Path, Path]:
+        """返回 (图片路径, metadata 路径, negative 路径)。
+
+        图片文件优先匹配已存在的扩展名（.png 或 .jpg），没有则默认 .png。
+        """
+        metadata_path = self.cache_dir / f"{key}.json"
+        # 查找已有的缓存文件（可能是 .png 或 .jpg）
+        for ext in (".png", ".jpg"):
+            candidate = self.cache_dir / f"{key}{ext}"
+            if candidate.is_file():
+                return (candidate, metadata_path, self.cache_dir / f"{key}.negative.json")
         return (
             self.cache_dir / f"{key}.png",
-            self.cache_dir / f"{key}.json",
+            metadata_path,
             self.cache_dir / f"{key}.negative.json",
         )
 
@@ -577,6 +663,13 @@ class RemoteImageCache:
                 os.fsync(handle.fileno())
             os.replace(temporary, path)
             temporary = None
+            # NamedTemporaryFile 0600 权限会导致跨容器/跨用户的 QQ 机器人
+            # (如 NapCat) 无法读取，报 rich media transfer failed。
+            # 统一设为 0o644，与截图等其他图片写入方式保持一致。
+            try:
+                os.chmod(path, 0o644)
+            except OSError:
+                pass
         finally:
             if temporary:
                 Path(temporary).unlink(missing_ok=True)

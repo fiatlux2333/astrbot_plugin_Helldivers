@@ -26,7 +26,7 @@ FACTION_LABELS = {
     "Humans": "超级地球",
     "Terminids": "终结族",
     "Automaton": "机器人",
-    "Illuminate": "光能族",
+    "Illuminate": "光能者",
 }
 _FACTION_ALIASES = {
     "1": "Humans",

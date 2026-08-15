@@ -16,10 +16,12 @@ from .text_utils import (
 )
 from .war_state import (
     campaign_planet,
+    campaign_progress_pct,
     faction_cn,
     normalize_faction,
     planet_health_pct,
     planet_index,
+    planet_liberation_pct,
     planet_name,
     planet_owner,
     planet_players,
@@ -156,7 +158,7 @@ def build_stats_card(
         [
             ("终结族击杀", format_number(terminid)),
             ("机器人击杀", format_number(stats.get("automatonKills", 0))),
-            ("光能族击杀", format_number(stats.get("illuminateKills", 0))),
+            ("光能者击杀", format_number(stats.get("illuminateKills", 0))),
             ("阵亡次数", format_number(stats.get("deaths", 0))),
         ]
     )
@@ -460,7 +462,7 @@ def build_dashboard_card(
     fac_meta = [
         ("Automaton", "进攻机器人", FACTION_COLORS["Automaton"]),
         ("Terminids", "进攻终结族", FACTION_COLORS["Terminids"]),
-        ("Illuminate", "进攻光能族", FACTION_COLORS["Illuminate"]),
+        ("Illuminate", "进攻光能者", FACTION_COLORS["Illuminate"]),
     ]
     for fac, title, color in fac_meta:
         block = attacking.get(fac) or {}
@@ -604,12 +606,11 @@ def build_warfront_card(faction: str, campaigns: list[dict[str, Any]]) -> Card:
             p = campaign_planet(c) or {}
             name = planet_name(p)
             players = planet_players(p)
-            hp = planet_health_pct(p)
-            pct = 100.0 - hp if hp is not None else 0.0  # 解放进度≈失去的生命
+            # 进度优先取 event/regions 聚合（API 改版后主战场恒满血）
+            prog = campaign_progress_pct(c)
+            pct = prog if prog is not None else 0.0
             note = f"在线 {format_number(players)}"
-            if hp is not None:
-                note = f"生命 {hp:.1f}%  ·  " + note
-            card.bar(name, pct if hp is not None else 0.0, color=accent, note=note)
+            card.bar(name, pct, color=accent, note=note)
 
     _section("🛡 防御 / 事件", defence)
     _section("🗡 进攻 / 解放", attack)
@@ -641,6 +642,9 @@ def build_planet_card(planet: dict[str, Any]) -> Card:
     hp = planet_health_pct(planet)
     if hp is not None:
         card.bar("生命值", hp, color=accent, note=f"{hp:.1f}%")
+    lib = planet_liberation_pct(planet)
+    if lib is not None:
+        card.bar("解放进度", lib, color=accent, note=f"{lib:.1f}%")
     biome = ""
     if isinstance(planet.get("biome"), dict):
         biome = planet["biome"].get("name") or ""

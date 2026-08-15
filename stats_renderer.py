@@ -670,9 +670,9 @@ def _metric_rows(stats: Mapping[str, Any]) -> list[tuple[str, str, str]]:
         ("终结族击杀", _fmt_int(stats.get("terminid_kills")), "终结族消灭数"),
         ("机器人击杀", _fmt_int(stats.get("automaton_kills")), "机器人摧毁数"),
         (
-            "光能族击杀",
+            "光能者击杀",
             _fmt_int(stats.get("illuminate_kills")),
-            "光能族消灭数",
+            "光能者消灭数",
         ),
         ("总击杀", _fmt_int(stats.get("total_kills")), "敌人消灭总数"),
         ("绝地潜兵阵亡", _fmt_int(stats.get("deaths")), "为英雄致敬"),
@@ -723,7 +723,7 @@ def _draw_metrics(draw: Any, model: Mapping[str, Any]) -> None:
             else FACTION_COLORS["Automaton"]
             if "机器人" in label
             else FACTION_COLORS["Illuminate"]
-            if "光能族" in label
+            if "光能者" in label
             else SUPER_EARTH_BLUE
         )
         draw.rectangle((x, y + 9, x + 3, y + row_height - 9), fill=accent)

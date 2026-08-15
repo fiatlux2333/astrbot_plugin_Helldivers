@@ -107,6 +107,7 @@ class WikiClient:
         proxy_url: str = "",
         search_limit: int = 5,
         extract_chars: int = 900,
+        full_extract_chars: int = 3000,
         prefer_hd2: bool = True,
         retry_max_attempts: int = 3,
         retry_base_delay: float = 2.0,
@@ -120,6 +121,7 @@ class WikiClient:
         self.proxy_url = proxy_url or None
         self.search_limit = max(1, min(10, int(search_limit)))
         self.extract_chars = max(200, min(2000, int(extract_chars)))
+        self.full_extract_chars = max(500, min(6000, int(full_extract_chars)))
         self.prefer_hd2 = prefer_hd2
         self.retry_max_attempts = max(1, int(retry_max_attempts))
         self.retry_base_delay = float(retry_base_delay)
@@ -289,47 +291,59 @@ class WikiClient:
             await self.cache.set(cache_key, results, self.cache.search_ttl)
         return results
 
-    async def get_page_summary(self, title: str) -> Optional[dict[str, Any]]:
+    async def get_page_summary(
+        self, title: str, *, full: bool = False
+    ) -> Optional[dict[str, Any]]:
         title = (title or "").strip()
         if not title:
             return None
-        cache_key = f"page:{title}"
+        cache_key = f"page:{'full' if full else 'intro'}:{title}"
         if self.cache:
             cached = await self.cache.get(cache_key)
             if isinstance(cached, dict) and cached.get("title"):
                 return cached
 
-        data = await self._get_api(
-            {
-                "action": "query",
-                "prop": "extracts|info",
-                "exintro": 1,
-                "explaintext": 1,
-                "exchars": self.extract_chars,
-                "inprop": "url",
-                "titles": title,
-                "redirects": 1,
-            }
-        )
+        params: dict[str, Any] = {
+            "action": "query",
+            "prop": "extracts|info",
+            # full 模式取全文（去掉 exintro，且不带 exchars —— MediaWiki
+            # TextExtracts 的 exchars 上限是 1200，超出会被拒；不传则
+            # 返回完整全文，由本地按 full_extract_chars 截断）
+            **({} if full else {"exintro": 1, "exchars": self.extract_chars}),
+            "explaintext": 1,
+            "exlimit": 1,
+            "inprop": "url",
+            "titles": title,
+            "redirects": 1,
+        }
+        data = await self._get_api(params)
         page = self._first_page(data)
         if not page or page.get("missing"):
             return None
 
         extract = (page.get("extract") or "").strip()
         if not extract:
-            extract = await self._fallback_wikitext_extract(page.get("title") or title)
+            extract = await self._fallback_wikitext_extract(
+                page.get("title") or title, full=full
+            )
+        # full 模式本地截断（API 已返回完整全文）
+        if full and len(extract) > self.full_extract_chars:
+            extract = extract[: self.full_extract_chars - 3] + "..."
 
         result = {
             "title": page.get("title") or title,
             "pageid": page.get("pageid"),
             "extract": extract or "",
+            "full": full,
             "url": page.get("fullurl") or self.page_url(page.get("title") or title),
         }
         if self.cache:
             await self.cache.set(cache_key, result, self.cache.page_ttl)
         return result
 
-    async def _fallback_wikitext_extract(self, title: str) -> str:
+    async def _fallback_wikitext_extract(
+        self, title: str, *, full: bool = False
+    ) -> str:
         data = await self._get_api(
             {
                 "action": "query",
@@ -360,8 +374,9 @@ class WikiClient:
         text = re.sub(r"'{2,}", "", text)
         text = re.sub(r"<[^>]+>", " ", text)
         text = re.sub(r"\s+", " ", text).strip()
-        if len(text) > self.extract_chars:
-            text = text[: self.extract_chars - 3] + "..."
+        limit = self.full_extract_chars if full else self.extract_chars
+        if len(text) > limit:
+            text = text[: limit - 3] + "..."
         return text
 
     @staticmethod
@@ -378,17 +393,72 @@ class WikiClient:
         return None
 
     def pick_best_title(self, query: str, results: list[dict[str, Any]]) -> str | None:
-        """唯一高置信匹配时返回标题，否则 None。"""
+        """按相关性评分返回最佳标题，低置信时返回 None（走列表展示）。
+
+        评分规则（高置信才自动选中）：
+        - 标题与查询完全相等（大小写不敏感）→ 直接命中
+        - 标题以查询开头/结尾（如 "RS-422 Railgun" 对 "railgun"）→ 高分
+        - 查询词全部出现在标题中 → 中分
+        - 单一结果且查询无 CJK → 视为可信（英文 wiki 的相关性排序）
+        含 CJK 的查询未经翻译直接搜索时结果不可信，必须词面匹配才选中。
+        """
+
+        def _tokenize(text: str) -> list[str]:
+            return [t for t in re.split(r"[^a-z0-9]+", text.lower()) if t]
+
         if not results:
             return None
         q = query.strip().lower()
+        if not q:
+            return None
         exact = [r for r in results if str(r.get("title", "")).lower() == q]
         if len(exact) == 1:
             return str(exact[0]["title"])
+
+        has_cjk = bool(re.search(r"[\u4e00-\u9fff]", query))
+        # 中文查询未经翻译时，MediaWiki 返回的相关性不可信：
+        # 只在标题词面包含查询词时才自动选中。
+        if has_cjk:
+            for r in results:
+                title = str(r.get("title", "")).lower()
+                if q in title:
+                    return str(r.get("title", ""))
+            return None
+
+        # 英文查询：单一结果视为可信
         if len(results) == 1:
             return str(results[0]["title"])
-        # 标题大小写不敏感唯一
         titles_lower = {str(r.get("title", "")).lower() for r in results}
         if len(titles_lower) == 1:
             return str(results[0]["title"])
+
+        q_tokens = _tokenize(q)
+        if not q_tokens:
+            return None
+        best_title: str | None = None
+        best_score = 0.0
+        for r in results:
+            title = str(r.get("title", ""))
+            title_lower = title.lower()
+            score = 0.0
+            if title_lower.startswith(q) or title_lower.endswith(q):
+                score += 3.0
+            t_tokens = set(_tokenize(title_lower))
+            hits = sum(1 for token in q_tokens if token in t_tokens)
+            if q_tokens and hits == len(q_tokens):
+                score += 2.0
+            elif hits:
+                score += 0.5 * hits / len(q_tokens)
+            # 词面子串（如 "railgun" 在 "rs-422 railgun" 中）
+            if len(q) >= 4 and q in title_lower:
+                score += 1.5
+            snippet = str(r.get("snippet") or "").lower()
+            if q in snippet:
+                score += 0.5
+            if score > best_score:
+                best_score = score
+                best_title = title
+        # 阈值：需要较强的词面证据，否则让用户从列表里选
+        if best_title is not None and best_score >= 2.5:
+            return best_title
         return None
