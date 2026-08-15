@@ -82,43 +82,49 @@ cd astrbot_plugin_Helldivers
 pip install -r requirements.txt
 ```
 
-### 发布到插件市场前打包
+3. 安装 Chromium 系统库（Debian/Ubuntu 容器必看）：
 
-AstrBot 插件市场压缩包上限为 **16MB**。请使用仓库根目录的 `pack.sh` 生成干净 zip，不要直接打包整个工作区（会把 `.git`、`__pycache__` 等垃圾文件打进去）：
-
-```bash
-bash pack.sh
-# 输出: dist/astrbot_plugin_Helldivers.zip
-```
-
-当前实测约 **6.4MB / 100 个文件**，已排除 `.git`、`__pycache__`、`.pytest_cache`、`.playwright-mcp`、`dist`、`data` 等。
-
-3. 使用 Playwright 网页截图时安装 Chromium：
+Playwright 的 Chromium 需要一批系统依赖库才能运行。**缺少这些库是截图命令报错的最常见原因**，报错信息通常为 `Host system is missing dependencies` 或截图直接超时返回空。
 
 ```bash
-python -m playwright install chromium
-```
-
-Debian/Ubuntu 容器如果缺少 Chromium 系统库，可执行：
-
-```bash
+# 方法一：Playwright 自动安装全部依赖（推荐，需 root）
 python -m playwright install --with-deps chromium
+
+# 方法二：手动安装（容器内没有 root 权限或自动安装失败时）
+apt update && apt install -y \
+    libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 \
+    libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
+    libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 \
+    libasound2 libatspi2.0-0
 ```
 
-AstrBot 已运行在名为 `astrbot` 的 Docker 容器中时，可直接执行：
+AstrBot 运行在名为 `astrbot` 的 Docker 容器中时：
 
 ```bash
+# 进入容器安装
+docker exec -it astrbot bash
+python -m playwright install --with-deps chromium
+# 或者只装 Chromium 不装系统库（库已在镜像中时）
 docker exec astrbot python -m playwright install chromium
 ```
+
+验证 Chromium 是否可用：
+
+```bash
+# 在 AstrBot 容器内执行，无报错即正常
+python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(); print('✅ Chromium 正常'); b.close(); p.stop()"
+```
+
+如果仍然报错，检查是否缺少中文字体（见下一节），字体缺失不会让 Chromium 崩溃但会导致截图中文显示为方框。
 
 4. 在 AstrBot WebUI 的插件管理中启用插件，或完整重启 AstrBot。
 
 ### Linux 中文字体
 
-图片渲染需要可用的中文字体。Linux 环境推荐安装 Noto CJK：
+图片渲染和网页截图都需要可用的中文字体。**字体缺失不会报错，但截图里的中文会全部变成方框□□□**，很多用户误以为是截图失败。请务必安装：
 
 ```bash
-# Debian / Ubuntu
+# Debian / Ubuntu（AstrBot Docker 镜像基于 Debian）
 apt install -y fonts-noto-cjk
 
 # RHEL / CentOS
@@ -128,7 +134,19 @@ yum install -y google-noto-cjk-fonts
 apk add font-noto-cjk
 ```
 
-Windows 和 macOS 通常可直接使用系统中文字体。
+AstrBot 容器内安装：
+
+```bash
+docker exec -it astrbot apt update && docker exec -it astrbot apt install -y fonts-noto-cjk
+```
+
+安装后需要重启 AstrBot 容器让字体生效：
+
+```bash
+docker restart astrbot
+```
+
+Windows 和 macOS 通常自带中文字体，无需额外安装。
 
 ### Companion 图片
 
