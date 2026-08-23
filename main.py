@@ -1,16 +1,17 @@
 """astrbot_plugin_Helldivers — Helldivers 2 银河战争查询插件。
 
 指令:
-  /hd2stats /dashboard /order /hd2news /steam /wiki /hd2help
+  /hd2stats /dashboard /order /hd2news /steam /wiki /hd2data
   /major_order /personal_order /map /dss
   /global_events /warfront /planet
 /银河快报
-/hd2 | /help | /hd2help
+/hd2 | /hd2help
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 from collections.abc import AsyncGenerator, Callable
 from functools import wraps
@@ -49,6 +50,7 @@ from .companion_screenshot import (
     companion_latest_news_target,
     parse_companion_planet_target,
 )
+from .companion_news_monitor import CompanionNewsMonitor
 from .dashboard_renderer import DashboardRenderer
 from .dss_renderer import DSSRenderer
 from .dispatch_renderer import DispatchRenderer
@@ -67,6 +69,7 @@ from .stats_renderer import StatsRenderer
 from .steam_renderer import SteamRenderer
 from .translator import TranslationCache, TranslationService
 from .warfront_renderer import WarfrontRenderer
+from .arsenal_client import ArsenalClient
 from .wiki_client import WikiCache, WikiClient
 
 PLUGIN_DESC = (
@@ -77,63 +80,66 @@ HELP_TEXT = """\
 Helldivers 2 银河战争 {version}
 ━━━━━━━━━━━━━━━━━━━━
 【战况 · 图片卡片】
-/dashboard          银河战争总览（实时数据）
-/hd2stats           银河战争详细统计（实时数据）
-/major_order        主要任务（同 /order）
-/personal_order     个人任务
-/map                战争地图（阵营领土）
-/dss                Companion 民主空间站图文
-/global_events      全球事件
-/hd2news            Companion 最新新闻
-/companion          Companion 首页（截图+翻译）
-/warfront <阵营>    战线战况
-/planet <名称/编号> 星球详情
-/steam              Steam 新闻图片
+/dashboard            银河战争总览（实时数据）
+/hd2stats             银河战争详细统计（实时数据）
+/major_order          主要任务（同 /order）
+/personal_order       个人任务
+/map                  战争地图（阵营领土）
+/dss                  Companion 民主空间站图文
+/global_events        全球事件
+/hd2news              Companion 最新新闻
+/hd2news订阅 / 退订   新闻更新自动推送
+/companion            Companion 首页（截图+翻译）
+/warfront <阵营>      战线战况
+/planet <名称/编号>   星球详情
+/steam                Steam 新闻图片
 【文本】
-/wiki <关键词>      Helldivers Wiki（-f 查看全文）
-/kb <关键词>        AstrBot 知识库检索
-/银河快报           立即获取最新一期银河快报
-/hd2help           全部指令说明
-/hd2               简短帮助
+/wiki <关键词>        Helldivers Wiki（-f 查看全文）
+/hd2data <名称>       军需簿：武器/护甲/敌人
+/银河快报             立即获取最新一期银河快报
+/hd2help              全部指令说明
+/hd2                  简短帮助
 ━━━━━━━━━━━━━━━━━━━━
-阵营: Terminids/Automaton/Illuminate
-     （终结族/机器人/光能者）
-数据: api.helldivers2.dev · wiki.gg
+阵营: Terminids / Automaton / Illuminate
+     （终结族 / 机器人 / 光能者）
+数据: api.helldivers2.dev · wiki.gg · HD2Tool
 为了超级地球！🌍""".format(version=PLUGIN_VERSION)
 
 HDHELP_TEXT = """\
 绝地潜兵2情报助手 {version} · 全部指令
 ━━━━━━━━━━━━━━━━━━━━
-【核心战况 · 实时数据】
-/dashboard          银河战争总览（防御/解放/重点战线）
-/hd2stats           在线人数、击杀、命中率等统计
-/order              当前最高指令任务卡
-/po                 当前个人指令
 
-【Companion 截图】
-/hd2news            最新新闻（截图+翻译）
-/companion          Companion 首页
-/dss                民主空间站面板+摘要
-/planet <名称/编号>  星球详情（支持中文名和链接）
-/hd2refresh         强制刷新截图缓存
+【核心战况 · 实时数据】
+/dashboard            银河战争总览（防御/解放/重点战线）
+/hd2stats             在线人数、击杀、命中率等统计
+/order                当前最高指令任务卡
+/po                   当前个人指令
+
+【Companion 截图 · 翻译】
+/hd2news              最新新闻（截图+翻译）
+/hd2news订阅 / 退订   新闻更新自动推送到本群
+/companion            Companion 首页
+/dss                  民主空间站面板+摘要
+/planet <名称/编号>   星球详情（支持中文名和链接）
+/hd2refresh           强制刷新截图缓存
 
 【地图与战线】
-/map                银河战争地图
-/warfront <阵营>     阵营战线 Top 10
-/events             全球事件
+/map                  银河战争地图
+/warfront <阵营>      阵营战线 Top 10
+/events               全球事件
 
 【外部资讯】
-/steam              Steam 更新公告
-/wiki <关键词>       Wiki 查询（中文自动译名；加 -f 看全文）
-/kb <关键词>         知识库检索（无参数列出全部库）
-/银河快报            最新一期快报
-/银河快报订阅/退订    群推送开关
+/steam                Steam 更新公告
+/wiki <关键词>        Wiki 查询（中文自动译名；加 -f 看全文）
+/hd2data <名称>       军需簿：武器/护甲/敌人（俗称：电喷/泰坦）
+/银河快报             最新一期快报
+/银河快报订阅 / 退订   群推送开关
 
 【帮助】
-/hd2                简短帮助
-/hd2help            本说明
+/hd2                  简短帮助
+/hd2help              本说明
 ━━━━━━━━━━━━━━━━━━━━
-阵营: 终结族/机器人/光能者
+阵营: 终结族 / 机器人 / 光能者
 为了超级地球！🌍""".format(version=PLUGIN_VERSION)
 
 
@@ -195,6 +201,8 @@ class HelldiversPlugin(Star):
         self.companion_playwright: CompanionPlaywrightClient | None = None
         self.companion_screenshots: CompanionScreenshotClient | None = None
         self._companion_warmup_task: asyncio.Task | None = None
+        self.companion_news_monitor: CompanionNewsMonitor | None = None
+        self._companion_news_push_enabled = False
 
     def _cfg(self, key: str, default: Any = None) -> Any:
         if self.config is None:
@@ -487,6 +495,14 @@ class HelldiversPlugin(Star):
             companion_translation_budget=float(
                 self._cfg("companion_translation_timeout", 60.0) or 60.0
             ),
+            arsenal_client=ArsenalClient(
+                data_dir / "arsenal",
+                proxy_url=str(self._cfg("proxy_url", "") or ""),
+                timeout=int(self._cfg("api_timeout", 30) or 30),
+                user_agent=str(self._cfg("api_user_agent", USER_AGENT)),
+            )
+            if bool(self._cfg("enable_arsenal", True))
+            else None,
         )
 
         if self.companion_playwright is not None and enable_translation:
@@ -581,6 +597,12 @@ class HelldiversPlugin(Star):
                 "[HD2] 建议在插件配置中填写 api_contact（联系邮箱），以遵守 Helldivers API 礼仪"
             )
         logger.info(f"[HD2] plugin initialized {PLUGIN_VERSION}, data_dir={data_dir}")
+        self.companion_news_monitor = CompanionNewsMonitor(
+            data_dir / "companion_news"
+        )
+        self._companion_news_push_enabled = bool(
+            self._cfg("companion_news_push_enabled", False)
+        )
         self._start_companion_warmup()
 
     def _start_companion_warmup(self) -> None:
@@ -639,19 +661,132 @@ class HelldiversPlugin(Star):
         while True:
             for target in targets:
                 try:
-                    await self.companion_playwright.capture(target)  # type: ignore[union-attr]
+                    # When news push is enabled, force a fresh capture for
+                    # news_latest so text extraction always runs (the TTL
+                    # cache would otherwise skip the page load and leave
+                    # capture_texts stale, preventing change detection).
+                    force = (
+                        target.kind == "news_latest"
+                        and self._companion_news_push_enabled
+                        and self.companion_news_monitor is not None
+                    )
+                    path = await self.companion_playwright.capture(  # type: ignore[union-attr]
+                        target, force=force
+                    )
                     logger.info(
                         "[HD2] Companion 预热完成: %s", target.kind
                     )
+                    if target.kind == "news_latest":
+                        await self._check_companion_news_change(path)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001 - background warmup
-                    logger.debug(
-                        "[HD2] Companion 预热失败 %s: %s", target.kind, exc
+                    # news_latest 失败会影响订阅推送的及时性，用 WARNING 留痕；
+                    # 其余页面预热失败属正常降级，保持 DEBUG。
+                    log = (
+                        logger.warning
+                        if target.kind == "news_latest"
+                        else logger.debug
                     )
+                    log("[HD2] Companion 预热失败 %s: %s", target.kind, exc)
                 # Small spacing between captures to avoid bursting.
                 await asyncio.sleep(5)
             await asyncio.sleep(interval)
+
+    async def _check_companion_news_change(self, path: Path) -> None:
+        """Detect news content changes via fingerprint and push to subscribers.
+
+        Called from the warmup loop after each ``news_latest`` capture with
+        the screenshot path already in hand — no second capture needed.
+        The fingerprint is only committed after a successful push (or an
+        intentional skip), so a transient delivery failure doesn't
+        permanently consume a news update — the next warmup cycle
+        re-detects and re-pushes.
+        """
+        monitor = self.companion_news_monitor
+        if monitor is None:
+            return
+        client = self.companion_playwright
+        if client is None:
+            return
+        texts = client.capture_texts("news_latest")
+        if not texts:
+            return
+        fingerprint = hashlib.sha1("\n".join(texts).encode("utf-8")).hexdigest()
+        if not monitor.check_fingerprint(fingerprint):
+            return
+        if not monitor.sessions:
+            logger.info(
+                "[HD2] Companion 新闻已更新，但无订阅群，跳过推送"
+            )
+            monitor.commit_fingerprint(fingerprint)
+            return
+        if not self._companion_news_push_enabled:
+            logger.info(
+                "[HD2] Companion 新闻已更新，但推送总开关未启用，跳过推送"
+            )
+            monitor.commit_fingerprint(fingerprint)
+            return
+        # 翻译未完成时 capture 会返回旧缓存截图（stale-while-revalidate），
+        # 而文本指纹已是新内容——此时推送的是过期图片。跳过推送且不提交
+        # 指纹，等下一轮预热拿到带新内容的截图再推。
+        if self._served_companion_stale("news_latest"):
+            logger.info(
+                "[HD2] Companion 新闻已更新，但截图为旧缓存（翻译未完成），"
+                "本轮跳过推送，下一轮重试"
+            )
+            return
+        delivered = await self._push_companion_news(path, list(monitor.sessions))
+        if delivered > 0:
+            monitor.commit_fingerprint(fingerprint)
+        else:
+            logger.warning(
+                "[HD2] Companion 新闻推送全部失败（delivered=0/%d），"
+                "不提交指纹，下一轮预热将重试推送",
+                len(monitor.sessions),
+            )
+
+    async def _push_companion_news(
+        self, path: Path, sessions: list[str]
+    ) -> int:
+        """Send a news-update screenshot to all subscribed sessions.
+
+        Returns the number of sessions the message was delivered to.
+        """
+        if not path or not path.is_file():
+            logger.warning(
+                "[HD2] Companion news push image missing: %s", path
+            )
+            return 0
+        try:
+            image_bytes = path.read_bytes()
+        except OSError as exc:
+            logger.warning(
+                "[HD2] Companion news push image unreadable: %s error=%s",
+                path,
+                exc,
+            )
+            return 0
+        delivered = 0
+        for unified_msg_origin in sessions:
+            try:
+                chain = MessageChain().message("📰 Companion 新闻更新")
+                chain.chain.append(Image.fromBytes(image_bytes))
+                await self.context.send_message(unified_msg_origin, chain)
+                delivered += 1
+            except Exception as e:
+                logger.warning(
+                    "[HD2] Companion news push failed: session=%s error=%s",
+                    unified_msg_origin,
+                    e,
+                )
+        if delivered:
+            logger.info(
+                "[HD2] Companion 新闻推送完成: delivered=%d/%d",
+                delivered,
+                len(sessions),
+            )
+        return delivered
 
     async def terminate(self) -> None:
         if self._companion_warmup_task is not None:
@@ -957,6 +1092,65 @@ class HelldiversPlugin(Star):
                 yield event.plain_result("❌ Companion 最新新闻暂时不可用，请稍后重试。")
             return
 
+    @filter.command("hd2news订阅", alias={"news_subscribe"})
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
+    @_command_handler
+    async def cmd_news_subscribe(
+        self, event: AstrMessageEvent
+    ) -> AsyncGenerator[Any, None]:
+        """在当前群订阅 Companion 新闻推送。"""
+        monitor = self.companion_news_monitor
+        if monitor is None:
+            yield event.plain_result(
+                "❌ Companion 新闻推送尚未初始化。"
+            )
+            return
+        if not self.companion_enabled or self.companion_backend != "playwright":
+            yield event.plain_result(
+                "❌ 需先启用 Companion Playwright 截图（配置 enable_companion_screenshots "
+                "并选择 playwright 后端），才能订阅新闻推送。"
+            )
+            return
+        if not self._companion_news_push_enabled:
+            yield event.plain_result(
+                "❌ 新闻推送总开关未启用，请在插件配置中开启 "
+                "companion_news_push_enabled 后重载插件。"
+            )
+            return
+        if not bool(self._cfg("companion_warmup_enabled", True)):
+            yield event.plain_result(
+                "❌ Companion 后台预热未启用，新闻推送依赖预热循环检测变更。"
+                "请在配置中开启 companion_warmup_enabled。"
+            )
+            return
+        origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        if not origin:
+            yield event.plain_result("❌ 无法获取当前群会话标识，请检查适配器。")
+            return
+        if monitor.subscribe(origin):
+            yield event.plain_result(
+                "✅ 已订阅 Companion 新闻推送，有新新闻时将自动同步到本群。"
+            )
+        else:
+            yield event.plain_result("ℹ️ 本群已经订阅 Companion 新闻推送。")
+
+    @filter.command("hd2news退订", alias={"news_unsubscribe"})
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
+    @_command_handler
+    async def cmd_news_unsubscribe(
+        self, event: AstrMessageEvent
+    ) -> AsyncGenerator[Any, None]:
+        """取消当前群的 Companion 新闻推送。"""
+        monitor = self.companion_news_monitor
+        if monitor is None:
+            yield event.plain_result("ℹ️ Companion 新闻推送当前未启用。")
+            return
+        origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        if origin and monitor.unsubscribe(origin):
+            yield event.plain_result("✅ 已取消本群的 Companion 新闻推送。")
+        else:
+            yield event.plain_result("ℹ️ 本群尚未订阅 Companion 新闻推送。")
+
     @filter.command("companion", alias={"首页", "companion_home"})
     @_command_handler
     async def cmd_companion(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
@@ -1041,66 +1235,30 @@ class HelldiversPlugin(Star):
             msg = "❌ Wiki 查询失败，请稍后重试。"
         yield event.plain_result(msg)
 
-    @filter.command("kb", alias={"知识库"})
+    @filter.command("hd2data", alias={"军需簿", "数据库", "装备", "武器库"})
     @_command_handler
-    async def cmd_kb(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
-        """查询 AstrBot 知识库。/kb 列出全部；/kb <关键词> [库名...] 检索"""
-        args = _strip_cmd(event.message_str or "", {"kb", "知识库"})
+    async def cmd_arsenal_data(
+        self, event: AstrMessageEvent
+    ) -> AsyncGenerator[Any, None]:
+        """军需簿查询：/hd2data <名称>，武器/战备/护甲（HD2Tool）+ 敌人（wiki.gg）"""
+        args = _strip_cmd(event.message_str or "", {"hd2data", "军需簿", "数据库", "装备", "武器库"})
         query = " ".join(args).strip()
-        kb_manager = getattr(self.context, "kb_manager", None)
-        if kb_manager is None:
-            yield event.plain_result("❌ 当前 AstrBot 版本不支持知识库接口。")
+        if not query:
+            yield event.plain_result(
+                "用法: /hd2data <名称>（武器/战备/护甲/敌人）\n"
+                "例如: /hd2data 磁轨炮 · /hd2data 电喷 · /hd2data 泰坦"
+            )
             return
         try:
-            kbs = await kb_manager.list_kbs()
-            if not kbs:
-                yield event.plain_result(
-                    "ℹ️ AstrBot 上还没有任何知识库。\n"
-                    "可在 AstrBot WebUI「知识库」页面创建并上传文档。"
-                )
+            result = await self._svc().get_arsenal_image(query)
+            if isinstance(result, str):
+                yield event.plain_result(result)
                 return
-            if not query:
-                lines = ["📚 AstrBot 知识库列表", "-------------"]
-                for kb in kbs:
-                    name = getattr(kb, "kb_name", None) or "?"
-                    desc = (getattr(kb, "description", "") or "").strip()
-                    lines.append(f"▎{name}" + (f" — {desc}" if desc else ""))
-                lines.append("-------------")
-                lines.append("用法: /kb <关键词> [库名...]（默认检索全部库）")
-                yield event.plain_result("\n".join(lines))
-                return
-
-            parts = query.split()
-            # 末尾若出现已知库名则视为指定库，否则检索全部
-            kb_names = [getattr(k, "kb_name", "") for k in kbs]
-            selected: list[str] = []
-            while len(parts) > 1 and parts[-1] in kb_names:
-                selected.insert(0, parts.pop())
-            query = " ".join(parts)
-
-            result = await kb_manager.retrieve(query, selected or kb_names)
-            if not result or not result.get("results"):
-                yield event.plain_result(
-                    f"ℹ️ 知识库中没有找到与“{query}”相关的内容。"
-                )
-                return
-            chunks = result["results"][:5]
-            lines = [f"📚 知识库检索 | {query}", "-------------"]
-            for i, chunk in enumerate(chunks, 1):
-                score = float(chunk.get("score") or 0.0)
-                content = str(chunk.get("content") or "").strip()
-                if len(content) > 300:
-                    content = content[:297] + "..."
-                lines.append(f"[{i}] {chunk.get('doc_name')} ({score:.2f})")
-                lines.append(f"▎{content}")
-                lines.append("")
-            lines.append(f"共 {len(result['results'])} 条命中，显示前 {len(chunks)} 条")
-            yield event.plain_result("\n".join(lines).strip())
-        except ValueError as e:
-            yield event.plain_result(f"❌ {e}")
+            async for r in self._yield_images(event, result, fallback="❌ 军需簿查询失败。"):
+                yield r
         except Exception as e:
-            logger.exception(f"[HD2] /kb error: {e}")
-            yield event.plain_result("❌ 知识库检索失败，请稍后重试。")
+            logger.exception(f"[HD2] /hd2data error: {e}")
+            yield event.plain_result("❌ 军需簿查询失败，请稍后重试。")
 
     @filter.command("personal_order", alias={"个人任务", "po"})
     @_command_handler

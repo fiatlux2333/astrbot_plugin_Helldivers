@@ -4,7 +4,7 @@
 
 为群聊提供银河战争总览、战争统计、重要指令、Companion 中文网页截图、民主空间站、星球详情、银河战争地图、Steam 公告、Wiki 查询与“银河快报”自动推送。
 
-当前版本：`v1.8.7`
+当前版本：`v1.8.8`
 
 > **为了超级地球，为了管理式民主。**
 
@@ -29,9 +29,11 @@
 - **战线战况** (`/warfront <阵营>`) - 玩家部署与解放进度 Top 10
 - **星球详情** (`/planet <名称或编号>`) - 翻译 Companion 完整星球页面与文字情报；翻译不完整时优先返回上次翻译快照，无快照则返回部分翻译截图，绝不降级
 - **Companion 首页** (`/companion`) - 截取 Companion 首页整屏并翻译；翻译不完整时优先返回上次翻译快照，无快照则返回部分翻译截图，可选显示更多战役卡片
+- **新闻订阅** (`/hd2news订阅`) - 在当前群订阅 Companion 新闻推送，后台预热检测到新闻更新时自动推送翻译截图
+- **取消订阅** (`/hd2news退订`) - 停止当前群的 Companion 新闻自动推送
 - **全球事件** (`/global_events`) - 当前活跃事件简报
 - **Wiki 查询** (`/wiki <关键词> [-f]`) - Helldivers Wiki 词条搜索与摘要；中文自动按官方译名转英文搜索，`-f` 返回全文
-- **知识库检索** (`/kb [关键词] [库名]`) - 检索 AstrBot 知识库；无参数列出全部知识库
+- **军需簿查询** (`/hd2data <名称>`) - 武器/战备/护甲/手榴弹数值卡片（伤害/穿甲/护甲等级/冷却），外加敌人血量/阵营/体型；支持中文名、英文型号和玩家俗称（电喷/次抛/磁小轨/泰坦），装备数据来自开源 HD2Tool（MIT），敌人数据来自 helldivers.wiki.gg
 
 ### 📡 银河快报
 
@@ -47,11 +49,13 @@
 - 内存与磁盘双层缓存，支持定时刷新
 - 全局请求限流、重试退避与 429 冷却
 - Pillow 本地卡片渲染，以及 Playwright + Chromium 原网页截图
-- AI 翻译支持内置接口与 OpenAI 兼容接口，并使用《绝地潜兵2》本地化提示词和固定术语
-- 翻译前自动预替换官方中文术语词表（敌人/星球/星系/战备共 548 条），减少 LLM 调用、避免术语跑偏
+- AI 翻译支持内置接口与 OpenAI 兼容接口，使用含核心术语表、机翻腔对照示例和语序重组规则的本地化提示词；提示词实质性改版时通过协议指纹（当前 v4）自动失效全部旧翻译缓存，确保新提示词立即生效
+- 翻译前自动预替换官方中文术语词表（敌人/星球/星系/战备共 569 条），减少 LLM 调用、避免术语跑偏
 - 批量翻译使用并行提交（`asyncio.gather`），单批失败不影响其他批次，预算超时后未完成的批次转入后台继续写入缓存
 - 翻译输出 `max_tokens` 限制（默认 500），防止免费/慢速模型输出爆炸（无限制时可能生成数千 token 导致超时）
 - Companion 截图后台定时预热：启动后自动预翻译新闻和空间站页面，用户请求时直接返回缓存截图，无需等待翻译 API
+- Companion 新闻订阅推送：后台预热时计算新闻页面文本指纹，检测到新闻更新后自动向已订阅群推送翻译截图；首次启动只建立基线，不补发旧内容。推送具备可靠性保障——全部会话送达失败时不会消费该更新，下一轮预热自动重试；翻译未完成（截图仍为旧缓存）时跳过本轮，等拿到含新内容的截图再推送，避免把过期图片推给订阅群
+- 军需簿数据下载带稳定性防护：16MB 响应体积上限防止异常镜像拖垮进程，wiki.gg 不可用时进入 15 分钟失败退避（不再每次查询都阻塞等待超时），并发查询经锁串行化避免重复下载，缓存全部采用 tmp+replace 原子写入
 - Companion 截图 stale-while-revalidate：翻译失败时优先返回上次翻译截图（2 小时窗口），而非降级或返回英文
 - Companion 截图页面加载检测使用 DOM 元素检测（`.backdrop.pulse-2`），而非文本匹配，避免误判正常页面内容
 - Companion 截图永不因翻译不完整而报错：优先全中文 → 旧翻译快照 → 部分翻译 → 英文，始终返回图片
@@ -275,12 +279,14 @@ Cookie 属于敏感登录凭据，不要发送给他人或提交到仓库。插�
 | `companion_warmup_enabled` | bool | `true` | 启用后台定时预热，自动预翻译 Companion 页面，用户请求时直接返回缓存截图 |
 | `companion_warmup_interval` | int | `300` | 后台预热间隔（秒），建议与截图缓存时间一致 |
 | `companion_warmup_kinds` | string | `news_latest,station` | 后台预热页面，逗号分隔：`news_latest`、`station`、`homepage` |
+| `companion_news_push_enabled` | bool | `false` | 启用 Companion 新闻推送；开启后在目标群发送 `/hd2news订阅`，新闻更新时自动推送翻译截图 |
 
 ### 功能与图片
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `enable_wiki` | bool | `true` | 启用 Wiki 查询 |
+| `enable_arsenal` | bool | `true` | 启用军需簿查询 /hd2data（装备来自开源 HD2Tool + 敌人来自 wiki.gg，首次使用自动下载，24h 检查更新） |
 | `enable_map` | bool | `true` | 启用银河战争地图 |
 | `steam_news_count` | int | `10` | Steam 公告缓存数量 |
 | `steam_image_enabled` | bool | `true` | 启用 Steam 公告主图 |
@@ -299,6 +305,8 @@ Cookie 属于敏感登录凭据，不要发送给他人或提交到仓库。插�
 /order  或 /major_order            当前重要指令
 /personal_order 或 /po             当前个人指令
 /hd2news                           Companion 最新新闻截图
+/hd2news订阅                       订阅 Companion 新闻推送
+/hd2news退订                       取消 Companion 新闻推送
 /companion                         Companion 首页截图（含翻译）
 /steam                             Steam 官方更新
 /dss                               Companion 民主空间站截图与中文情报
@@ -308,7 +316,7 @@ Cookie 属于敏感登录凭据，不要发送给他人或提交到仓库。插�
 /hd2refresh 或 /刷新缓存             强制刷新 Companion 截图缓存
 /global_events                     全球事件
 /wiki <关键词> [-f]              Helldivers Wiki 查询；-f 返回全文；中文自动按官方译名搜索
-/kb [关键词] [库名]              AstrBot 知识库检索（无参数列出全部知识库）
+/hd2data <名称>                    军需簿：武器/护甲/敌人（俗称可用）
 /hd2                              插件简短帮助
 /hd2help 或 /hdhelp               插件全部指令说明
 ```
@@ -367,9 +375,12 @@ Illuminate / 光能者
 - `services.py`：缓存、翻译、查询与图片渲染编排
 - `api_client.py`：Helldivers 2 Community API 与 Steam API 客户端
 - `bilibili_monitor.py`：银河快报轮询、WBI 签名、图文解析与去重
-- `companion_screenshot.py`：Companion 路由校验、本地 Playwright/Browserless 截图、DOM 元素级加载检测、总超时、翻译缓存隔离、stale-while-revalidate、后台预热与图片安全校验
+- `arsenal_client.py`：军需簿数据客户端——HD2Tool 目录/俗称下载与 24h 刷新、wiki.gg 敌人表与部位护甲按需拉取、多路搜索（精确/规范化/前缀/子串/中文错字容错）、失败退避与下载体积上限
+- `card_specs.py`：各类情报卡片的声明式规格（总览/统计/指令/新闻/军需簿装备卡/敌人卡等），由 `card_renderer.py` 统一渲染
+- `companion_screenshot.py`：Companion 路由校验、本地 Playwright/Browserless 截图、DOM 元素级加载检测、总超时、翻译缓存隔离、stale-while-revalidate、后台预热、页面文本指纹提取与图片安全校验
+- `companion_news_monitor.py`：Companion 新闻订阅会话管理、新闻指纹变更检测与 state.json 持久化
 - `cache.py`：内存和磁盘缓存、后台刷新
-- `glossary.py`：官方中文译名词表（敌人/星球/星系/战备 548 条），加载自 `assets/glossary/*.json`，提供翻译前的术语预替换
+- `glossary.py`：官方中文译名词表（敌人/星球/星系/战备 569 条），加载自 `assets/glossary/*.json`，提供翻译前的术语预替换
 - `i18n.py`：界面标签与星球名委托 glossary 查询
 - `translator.py`：OpenAI 兼容批量翻译、`max_tokens` 输出限制、并行批次、宽松解析、逐条降级与限流冷却
 - `*_renderer.py`：各类 Pillow 图片渲染器
@@ -389,6 +400,7 @@ Illuminate / 光能者
 9. 免费/慢速翻译模型（如 longcat-2.0-free）建议关闭 `translation_stream` 并保持 `translation_max_tokens=1200`，防止模型输出爆炸导致超时。正式模型（gpt-4o-mini 等）可适当增大 `translation_max_tokens`。
 10. Companion 截图缓存时间（`companion_screenshot_cache_ttl`）建议与预热间隔（`companion_warmup_interval`）保持一致（均默认 300 秒），确保预热刷新后用户能立即拿到新截图。
 11. 官方译名词表位于 `assets/glossary/*.json`，修改词表后需重载插件生效。
+12. 军需簿（`/hd2data`）装备数据来自 GitHub 上的开源 HD2Tool（失败自动切换 gh-proxy 镜像），敌人数据来自 helldivers.wiki.gg。首次使用自动下载，24h 检查更新；wiki.gg 下载失败时进入 15 分钟退避，期间装备查询不受影响、敌人暂不可查，退避结束后自动重试。数据缓存在插件数据目录 `arsenal/` 下，删除目录可强制重新下载。
 
 ## 📊 数据源
 

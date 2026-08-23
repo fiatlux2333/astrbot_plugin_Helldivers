@@ -690,3 +690,233 @@ def build_planet_candidates_card(query: str, planets: list[dict[str, Any]]) -> C
         f"请用更精确名称重试，例如: /planet {planet_name(planets[0])}", muted=True
     )
     return card
+
+
+def build_arsenal_card(item: dict[str, Any], *, aliases: list[str] | None = None) -> Card:
+    """HD2Tool 武器库物品卡片：武器/战备/护甲/手榴弹通用。"""
+    from .arsenal_client import (
+        ACQUISITION_ZH,
+        COMPONENT_LABEL_ZH,
+        FIELD_ZH,
+        HANDLING_ZH,
+        PRODUCT_KIND_ZH,
+    )
+
+    name_zh = str(item.get("nameZh") or item.get("nameEn") or "?")
+    kind = PRODUCT_KIND_ZH.get(str(item.get("productKind")), str(item.get("productKind") or "装备"))
+    card = Card(
+        title=f"{kind} · {name_zh}",
+        accent=FACTION_COLORS["Humans"],
+        emblem="super_earth",
+        footer="数据: HD2Tool (MIT) · helldivers.wiki.gg",
+    )
+
+    # 基本信息网格
+    grid_pairs: list[tuple[str, str]] = [("型号", str(item.get("model") or "?"))]
+    if item.get("weaponType"):
+        grid_pairs.append(("类型", str(item["weaponType"])))
+    acq = item.get("acquisition") or {}
+    acq_kind = ACQUISITION_ZH.get(str(acq.get("kind")), str(acq.get("kind") or ""))
+    if acq.get("kind") == "warbond":
+        page = acq.get("page")
+        medals = acq.get("itemMedals")
+        acq_text = f"{acq_kind} 第{page}页" if page else acq_kind
+        if medals:
+            acq_text += f" · {medals}勋章"
+    else:
+        acq_text = acq_kind
+    if acq_text:
+        grid_pairs.append(("获取", acq_text))
+    if item.get("nameEn"):
+        grid_pairs.append(("英文名", str(item["nameEn"])))
+    card.grid(grid_pairs)
+
+    if aliases:
+        card.text(f"玩家俗称: {'、'.join(aliases[:5])}", muted=True)
+
+    # 护甲属性
+    armor = item.get("armor")
+    if isinstance(armor, dict) and armor:
+        card.divider().heading("护甲属性")
+        rating = armor.get("rating")
+        if isinstance(rating, (int, float)) and rating:
+            card.bar(
+                "护甲等级",
+                float(rating) / 150 * 100,
+                note=f"{int(rating)} ({armor.get('class') or '?'})",
+            )
+        pairs: list[tuple[str, str]] = []
+        if armor.get("speed") is not None:
+            pairs.append(("移速", str(armor["speed"])))
+        if armor.get("staminaRegen") is not None:
+            pairs.append(("体力回复", str(armor["staminaRegen"])))
+        if pairs:
+            card.grid(pairs)
+        if armor.get("passive"):
+            card.field("被动", str(armor["passive"]))
+
+    # 战斗数值组件
+    combat = item.get("combat")
+    if isinstance(combat, dict):
+        components = [c for c in combat.get("components") or [] if isinstance(c, dict)]
+        primary_id = combat.get("primaryComponentId")
+        if components:
+            card.divider().heading("战斗数值")
+        for comp in components:
+            label = COMPONENT_LABEL_ZH.get(
+                str(comp.get("label")), str(comp.get("label") or comp.get("type") or "")
+            )
+            suffix = "（主）" if comp.get("id") == primary_id and len(components) > 1 else ""
+            fields = comp.get("fields") or {}
+            parts: list[str] = []
+            for key, zh in FIELD_ZH.items():
+                if key not in fields:
+                    continue
+                value = fields[key]
+                if key == "armorPenetration" and isinstance(value, dict):
+                    pen = value.get("labelZh") or f"等级{value.get('value', '?')}"
+                    parts.append(f"穿甲 {pen}")
+                elif isinstance(value, (int, float)):
+                    parts.append(f"{zh} {int(value) if float(value).is_integer() else value}")
+                elif value:
+                    parts.append(f"{zh} {value}")
+            if parts:
+                card.field(f"{label}{suffix}", " · ".join(parts[:5]))
+
+    # 操控属性（弹匣/射速等）
+    handling = item.get("handling")
+    if isinstance(handling, dict) and handling:
+        pairs = []
+        for key, zh in HANDLING_ZH.items():
+            if key in handling and handling[key] not in (None, "", 0):
+                value = handling[key]
+                if key == "fireRate":
+                    pairs.append((zh, f"{value} RPM"))
+                elif key == "reloadSeconds":
+                    pairs.append((zh, f"{value}s"))
+                elif isinstance(value, list):
+                    pairs.append((zh, "/".join(str(v) for v in value[:4])))
+                else:
+                    pairs.append((zh, str(value)))
+        if pairs:
+            card.grid(pairs)
+
+    # 战备部署信息
+    deploy = item.get("deployment")
+    if isinstance(deploy, dict) and deploy.get("cooldownSeconds"):
+        card.field(
+            "战备",
+            f"冷却 {deploy['cooldownSeconds']}s"
+            + (f" · 输入码 {deploy['code']}" if deploy.get("code") else ""),
+        )
+
+    wiki = item.get("wiki") or {}
+    if wiki.get("url"):
+        card.divider().text(f"🔗 {wiki['url']}", muted=True)
+    return card
+
+
+def build_arsenal_candidates_card(
+    query: str, items: list[dict[str, Any]]
+) -> Card:
+    from .arsenal_client import PRODUCT_KIND_ZH
+
+    card = Card(
+        title=f"装备搜索 · {query}",
+        accent=FACTION_COLORS["Humans"],
+        emblem="super_earth",
+        footer="数据: HD2Tool (MIT) · 用 /hd2data <名称> 查看详情",
+    )
+    if not items:
+        card.text("未找到匹配装备。支持中文名、英文型号和玩家俗称（如 电喷/次抛/磁小轨）。", muted=True)
+        return card
+    for i, it in enumerate(items[:8], 1):
+        kind = PRODUCT_KIND_ZH.get(str(it.get("productKind")), "装备")
+        name = str(it.get("nameZh") or "?")
+        model = str(it.get("model") or "").strip()
+        label = f"{name}（{model}）" if model else name
+        card.text(f"[{i}] {label} · {kind}", muted=False)
+    if len(items) > 8:
+        card.text(f"...共 {len(items)} 条", muted=True)
+    return card
+
+
+def build_enemy_card(
+    item: dict[str, Any], armor_parts: list[tuple[str, int]] | None = None
+) -> Card:
+    """敌人卡片：阵营、护甲类型、血量（含部位）、部位护甲、伤害信息、wiki 链接。"""
+    from .arsenal_client import (
+        _ENEMY_CLASS_ZH,
+        _PART_NAME_ZH,
+        armor_tier_label,
+        parse_damage,
+        parse_health,
+    )
+
+    faction = str(item.get("faction") or "")
+    faction_lower = faction.casefold()
+    # 根据阵营配色和徽章（变体阵营归到母阵营配色）
+    if "terminid" in faction_lower or "spore" in faction_lower or "rupture" in faction_lower or "predator" in faction_lower:
+        accent = FACTION_COLORS["Terminids"]
+        emblem = "Terminids"
+    elif "automaton" in faction_lower or "jet" in faction_lower or "inciner" in faction_lower:
+        accent = FACTION_COLORS["Automaton"]
+        emblem = "Automaton"
+    elif "illuminate" in faction_lower or "vote" in faction_lower or "appropriator" in faction_lower or "cyborg" in faction_lower:
+        accent = FACTION_COLORS["Illuminate"]
+        emblem = "Illuminate"
+    elif "super earth" in faction_lower:
+        accent = FACTION_COLORS["Humans"]
+        emblem = "super_earth"
+    else:
+        accent = FACTION_COLORS.get(faction, FACTION_COLORS["Humans"])
+        emblem = "super_earth"
+
+    card = Card(
+        title=f"敌人 · {item.get('nameZh')}",
+        accent=accent,
+        emblem=emblem,
+        footer="数据: helldivers.wiki.gg (CC BY-NC-SA)",
+    )
+    # 基本信息
+    grid_pairs: list[tuple[str, str]] = [
+        ("英文名", str(item.get("nameEn") or "?")),
+        ("阵营", str(item.get("factionZh") or faction or "?")),
+    ]
+    enemy_class = str(item.get("enemyClass") or "").strip()
+    if enemy_class:
+        class_zh = _ENEMY_CLASS_ZH.get(enemy_class, enemy_class)
+        grid_pairs.append(("护甲类型", class_zh))
+    if item.get("size"):
+        grid_pairs.append(("体型等级", str(item["size"])))
+    card.grid(grid_pairs)
+
+    # 生命值（含部位）
+    parts = parse_health(str(item.get("healthRaw") or ""))
+    if parts:
+        card.divider().heading("生命值")
+        for value, label in parts[:5]:
+            card.field(label or "总血量", value)
+
+    # 部位护甲等级（游戏 0-10 护甲体系，grid 表格展示）
+    if armor_parts:
+        card.divider().heading("部位护甲")
+        grid_pairs: list[tuple[str, str]] = []
+        for part_name, av in armor_parts[:8]:
+            zh = _PART_NAME_ZH.get(part_name, part_name)
+            grid_pairs.append((zh, armor_tier_label(av)))
+        if grid_pairs:
+            card.grid(grid_pairs)
+
+    # 伤害信息
+    dmg_parts = parse_damage(str(item.get("damageRaw") or ""))
+    if dmg_parts:
+        card.divider().heading("攻击方式")
+        for desc, dtype in dmg_parts[:5]:
+            label = f"（{dtype}）" if dtype else ""
+            card.text(f"▎{desc}{label}")
+
+    wiki = item.get("wiki") or {}
+    if wiki.get("url"):
+        card.divider().text(f"🔗 {wiki['url']}", muted=True)
+    return card

@@ -608,6 +608,21 @@ class CompanionPlaywrightClient:
         # Tracks which page kinds were last served from a stale cache, so
         # command handlers can annotate the message ("翻译快照").
         self._served_stale: set[str] = set()
+        # Text fragments extracted during the most recent real capture of each
+        # page kind (keyed by target.kind).  Populated in _capture_uncached;
+        # NOT updated when the TTL cache short-circuits.  Used by the warmup
+        # loop to compute a content fingerprint for news-change detection.
+        self._last_capture_texts: dict[str, list[str]] = {}
+
+    def capture_texts(self, kind: str) -> list[str] | None:
+        """Return the text fragments from the most recent real capture of *kind*.
+
+        Returns ``None`` if no capture has performed text extraction yet.
+        When a capture serves a stale cache before extracting text (early
+        loading-failure returns), the previous successful texts are retained,
+        so the returned value may be older than the last ``capture()`` call.
+        """
+        return self._last_capture_texts.get(kind)
 
     def set_translate_callback(
         self,
@@ -965,6 +980,15 @@ class CompanionPlaywrightClient:
                     },
                 },
             )
+            # Store extracted text fragments for news-change fingerprinting.
+            # This runs on every real capture (cache miss), regardless of
+            # whether translation is enabled.
+            if isinstance(translations_source, list):
+                self._last_capture_texts[target.kind] = [
+                    str(v).strip()
+                    for v in translations_source
+                    if isinstance(v, str) and v.strip()
+                ]
             if self.translate_callback is not None and isinstance(
                 translations_source, list
             ):

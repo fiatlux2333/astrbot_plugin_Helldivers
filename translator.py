@@ -99,7 +99,10 @@ class TranslationService:
 
     def provider_fingerprint(self) -> str:
         parts = (
-            "translation-protocol-v3-hd2-localization",
+            # 协议号随提示词的实质性改版递增：指纹变化会使旧翻译缓存全部
+            # 失效，强制用新提示词重新翻译。v4 = 机翻腔对照示例 + 语序重组
+            # 规则（此前用户看到的始终是缓存里的旧提示词译文）。
+            "translation-protocol-v4-hd2-localization",
             self.mode,
             urlsplit(self.api_url).scheme.lower(),
             urlsplit(self.api_url).netloc.lower(),
@@ -179,29 +182,45 @@ class TranslationService:
         batch: bool,
     ) -> str:
         prompt = (
-            "你是《绝地潜兵2》简体中文本地化编辑，不是逐词翻译器。"
-            f"请将英文游戏文本改写为自然、利落、易读的{lang_name}。"
-            "译文要符合超级地球官方广播、军事简报和科幻战争 UI 的语气；"
-            "允许调整英语语序、合并重复表达，禁止保留生硬机翻句式。"
-            "固定术语：Helldivers=绝地潜兵，Super Earth=超级地球，"
-            "Managed Democracy=管理式民主，Ministry of Truth=真理部，"
-            "Major Order=最高指令，Democracy Space Station/DSS=民主空间站/DSS，"
-            "Terminids=终结族，Automatons=机器人，Illuminate=光能者，"
-            "Defense Campaigns=防御战役，Liberation Campaigns=解放战役，"
-            "Stratagem=战略配备，Hellpod=地狱舱，Eagle=飞鹰，Orbital=轨道。"
-            "星球、扇区和行动名称优先采用插件提供的固定译名；"
-            "没有固定译名时使用简洁稳定的音译，不要自行发挥。"
-            "保留数字、百分比、日期、倒计时、ID、单位和原有换行；"
-            "UI 标题尽量短，正文通顺但不要添加原文不存在的解释。"
+            "你是《绝地潜兵2》简体中文本地化编辑，为超级地球真理部改写战时新闻与战场简报。"
+            f"把英文游戏文本改写成自然流畅的{lang_name}，"
+            "像中文母语军官写的播报稿，坚决消除机翻腔。\n"
+            "改写规则：\n"
+            "1. 输入中已内嵌的中文专有名词（星球名、阵营名、战备名等）是官方译名，"
+            "直接沿用；整句必须按中文语序重新组织，不要沿英文语序逐词替换。\n"
+            "2. 核心术语：Helldivers→绝地潜兵，Super Earth→超级地球，"
+            "Managed Democracy→管理式民主，Ministry of Truth→真理部，"
+            "Major Order→最高指令，Democracy Space Station/DSS→民主空间站/DSS，"
+            "Terminids→终结族，Automatons→机器人，Illuminate→光能者，"
+            "Defense Campaigns→防御战役，Liberation Campaigns→解放战役，"
+            "Voteless→无票者，SEAF→超级地球武装部队，Galactic War→银河战争，"
+            "Stratagem→战略配备，Hellpod→地狱舱，Eagle→飞鹰，Orbital→轨道，"
+            "Reinforce→增援，Extract→撤离。"
+            "其余专名简洁音译，罗马数字（II/III）保留。\n"
+            "3. 译感：多用主动句和短句，军报节奏；"
+            "删掉直译冠词（\"一个\"\"一种\"），"
+            "不用\"被\"\"进行\"\"性的\"等翻译腔；UI 标签≤6字。\n"
+            "4. 数字、百分比、日期、倒计时、ID、单位和原有换行原样保留，"
+            "不添加原文没有的解释。\n"
+            "译感对照（✗机翻 → ✓地道）：\n"
+            "✗ 超级地球的公民们被提醒要保持警惕\n"
+            "✓ 超级地球提醒各位公民保持警惕\n"
+            "✗ 一个针对终结族的新的解放战役已经被启动\n"
+            "✓ 针对终结族的新一轮解放战役已经打响"
         )
         if batch:
             return (
                 prompt
-                + "输入是 JSON 字符串数组。必须返回 JSON 对象，格式为"
+                + "\n输入是 JSON 字符串数组，来自同一页面的可见文本，"
+                "相邻条目可能是同一段落的上下文，可据此把握语境；"
+                "但每条译文必须独立成立。必须返回 JSON 对象 "
                 + '{"translations":["译文1","译文2"]}。'
-                + "译文数组数量和顺序必须与输入完全一致，不要输出其他内容。"
+                + "译文数组长度和顺序必须与输入完全一致，"
+                + "不要使用 markdown 代码块，不要输出其他内容。"
+                + '示例 输入: ["JUST NOW","Defense of Vernen Wells"]'
+                + ' 示例 输出: {"translations":["刚刚","防御佛农井"]}'
             )
-        return prompt + "只返回译文，不要解释、不要引号。"
+        return prompt + "\n只返回译文本身，不要解释、不要引号、不要 markdown。"
 
     async def translate_text(self, text: str, to_lang: str | None = None) -> str:
         if not text or not text.strip() or len(text.strip()) < 3:

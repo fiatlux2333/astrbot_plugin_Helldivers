@@ -62,6 +62,7 @@ from .steam_renderer import SteamRenderer
 from .translator import TranslationCache, TranslationService
 from .war_state import WarState, normalize_faction, planet_index, planet_name
 from .warfront_renderer import WarfrontRenderer
+from .arsenal_client import ArsenalClient
 from .wiki_client import WikiClient
 
 
@@ -172,6 +173,7 @@ class HelldiversService:
         drop_untranslated_content: bool = True,
         companion_translation_batch_timeout: float = 9.0,
         companion_translation_budget: float = 18.0,
+        arsenal_client: "ArsenalClient | None" = None,
     ) -> None:
         self.client = client
         self.cache = cache
@@ -221,6 +223,7 @@ class HelldiversService:
             self.companion_translation_batch_timeout,
             min(120.0, float(companion_translation_budget)),
         )
+        self.arsenal_client = arsenal_client
 
         self._rotation_tasks: list[asyncio.Task] = []
         self._trend_task: asyncio.Task | None = None
@@ -945,7 +948,7 @@ class HelldiversService:
                 return ""
             return cached_text
 
-        translated = await self.translator.translate_text(extract)
+        translated = await self.translator.translate_text(preapply_glossary(extract))
         if translated and translated != extract:
             await self.translation_cache.store(
                 "wiki",
@@ -966,6 +969,57 @@ class HelldiversService:
             fallback_reason="unchanged",
         )
         return final
+
+    async def get_arsenal_image(self, query: str) -> list[Path] | str:
+        """数据库查询（装备 + 敌人）。返回图片路径列表；文案提示时返回 str。"""
+        if self.arsenal_client is None:
+            return "❌ 数据库功能未启用。"
+        loaded = await self.arsenal_client.ensure_loaded()
+        if not loaded:
+            return "❌ 装备数据加载失败（下载失败且无本地缓存），请稍后重试。"
+        # 敌人数据独立加载，失败不影响装备查询
+        try:
+            await self.arsenal_client.ensure_enemies()
+        except Exception as e:
+            logger.warning(f"[HD2] enemies load error: {e}")
+        from .card_specs import (
+            build_arsenal_candidates_card,
+            build_arsenal_card,
+            build_enemy_card,
+        )
+
+        results = self.arsenal_client.search(query)
+        if not results:
+            card = build_arsenal_candidates_card(query, [])
+            p = await self._render_card(card)
+            return [p] if p else "❌ 未找到匹配条目。支持中文名、型号和俗称（电喷/次抛等）。"
+
+        item = results[0]
+        # 敌人条目优先选同词的敌人（"泰坦" 同时命中护甲和敌人时选敌人）
+        for candidate in results:
+            if candidate.get("productKind") == "enemy":
+                item = candidate
+                break
+        if item.get("productKind") == "enemy":
+            # 按需拉取部位护甲（带缓存；失败不阻塞卡片）
+            armor_parts: list[tuple[str, int]] = []
+            try:
+                armor_parts = await self.arsenal_client.fetch_enemy_armor(
+                    str(item.get("nameEn") or "")
+                )
+            except Exception as e:
+                logger.warning(f"[HD2] enemy armor load error: {e}")
+            card = build_enemy_card(item, armor_parts=armor_parts)
+        elif len(results) > 1:
+            # 多候选：展示列表卡让用户选（首个结果含在列表里）
+            card = build_arsenal_candidates_card(query, results)
+        else:
+            aliases = self.arsenal_client.aliases_for(str(item.get("id") or ""))
+            card = build_arsenal_card(item, aliases=aliases)
+        p = await self._render_card(card)
+        if p is None:
+            return "❌ 卡片渲染不可用（Pillow 未安装）。"
+        return [p]
 
     async def get_wiki_message(self, query: str, *, full: bool = False) -> str:
         if not self.enable_wiki:

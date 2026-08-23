@@ -115,9 +115,9 @@ class TranslationTests(unittest.IsolatedAsyncioTestCase):
         prompt = TranslationService._localization_system_prompt(
             "简体中文", batch=True
         )
-        self.assertIn("不是逐词翻译器", prompt)
-        self.assertIn("Super Earth=超级地球", prompt)
-        self.assertIn("Stratagem=战略配备", prompt)
+        self.assertIn("超级地球", prompt)
+        self.assertIn("Super Earth→超级地球", prompt)
+        self.assertIn("Stratagem→战略配备", prompt)
         self.assertIn("防御战役", prompt)
         self.assertIn("不要输出其他内容", prompt)
 

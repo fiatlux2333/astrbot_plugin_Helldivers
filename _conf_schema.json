@@ -25,7 +25,7 @@
   "api_user_agent": {
     "description": "User-Agent",
     "type": "string",
-    "default": "astrbot_plugin_Helldivers/1.8.5"
+    "default": "astrbot_plugin_Helldivers/1.8.8"
   },
   "api_timeout": {
     "description": "API 请求超时（秒）",
@@ -136,6 +136,12 @@
     "type": "string",
     "hint": "逗号分隔，可选值：news_latest（最新新闻）、station（民主空间站）、homepage（首页）；默认预热新闻和空间站",
     "default": "news_latest,station"
+  },
+  "companion_news_push_enabled": {
+    "description": "启用 Companion 新闻推送",
+    "type": "bool",
+    "hint": "开启后，在目标群发送 /hd2news订阅 即可在 Companion 新闻更新时自动推送翻译截图；需同时启用 Companion 截图和后台预热",
+    "default": false
   },
   "enable_bilibili_galaxy_news": {
     "description": "启用 B站银河快报自动推送",
@@ -338,6 +344,12 @@
   "enable_wiki": {
     "description": "启用 Helldivers Wiki 查询 (/wiki)",
     "type": "bool",
+    "default": true
+  },
+  "enable_arsenal": {
+    "description": "启用军需簿查询（/hd2data）",
+    "type": "bool",
+    "hint": "数据来自开源 HD2Tool 项目，含官方中文译名和玩家俗称；首次使用自动下载约 500KB 数据，每 24 小时检查更新",
     "default": true
   },
   "wiki_base": {
