@@ -18,11 +18,21 @@ from astrbot_plugin_Helldivers.major_order_renderer import MajorOrderRenderer
 from astrbot_plugin_Helldivers.stats_model import build_stats_view_model
 from astrbot_plugin_Helldivers.stats_renderer import StatsRenderer
 from astrbot_plugin_Helldivers.steam_parser import parse_steam_content
-from astrbot_plugin_Helldivers.steam_renderer import SteamRenderer
+from astrbot_plugin_Helldivers.steam_renderer import (
+    SteamRenderer,
+    _visual_asset_image,
+)
 from astrbot_plugin_Helldivers.warfront_renderer import WarfrontRenderer
 
 
 class RendererTests(unittest.TestCase):
+    def test_steam_hero_falls_back_to_bundled_warbond_art(self) -> None:
+        # 无帖子配图时 /steam 卡片头图必须是捆绑的当前债券横幅，而非旗帜或渐变
+        hero = _visual_asset_image(None)
+        self.assertIsNotNone(hero)
+        assert hero is not None
+        self.assertEqual(hero.size, (1976, 630))
+
     def assert_png(
         self, path: Path | None, size: tuple[int, int] | None = None
     ) -> None:

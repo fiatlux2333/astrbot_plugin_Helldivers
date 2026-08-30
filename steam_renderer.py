@@ -223,11 +223,12 @@ def _visual_asset_image(visual_assets: Any | None):
         except (ImportError, ValueError):
             continue
     for module in modules:
-        for function_name in ("load_asset", "asset_image", "get_asset"):
+        for function_name in ("asset_image", "get_asset"):
             function = getattr(module, function_name, None)
             if not callable(function):
                 continue
             for asset_name in (
+                "user/steam_hero.png",
                 "global_events/super_earth_flag.png",
                 "global_events/super_earth_flag",
                 "emblems/super_earth.png",

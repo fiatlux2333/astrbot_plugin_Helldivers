@@ -91,7 +91,7 @@
     "map.reference": {
       "user": {
         "path": "map.png",
-        "sha256": "85f55bbf43456dc354bf6fc4a56d31f83b66a051b29e5076574f18954a887fc6"
+        "sha256": "3cfc0854418c751be9a1b0b00b0fa4ad473822f62eb980ef3c8f4fd1f2065f6d"
       },
       "attribution": "User-provided reference map",
       "source_url": null,
@@ -107,6 +107,17 @@
       "attribution": "User-provided map visual reference",
       "source_url": null,
       "license": "user-provided",
+      "original_sha1": null,
+      "media_type": "image/png"
+    },
+    "steam.hero": {
+      "user": {
+        "path": "steam_hero.png",
+        "sha256": "533cdf22624fda003048aa3657d715849a0773c4d5a295a8fb26d0c58965d8a7"
+      },
+      "attribution": "Helldivers 2 'Devoid of Liberty' official key art (store banner, via helldivers.wiki.gg)",
+      "source_url": "https://helldivers.wiki.gg/images/Helldivers_2_Devoid_of_Liberty_Key_Art_Store_Banner.png",
+      "license": "Arrowhead Game Studios promotional artwork; bundled as user-provided current-warbond hero",
       "original_sha1": null,
       "media_type": "image/png"
     },

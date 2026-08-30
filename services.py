@@ -131,7 +131,6 @@ class HelldiversService:
     CACHE_SPACE_STATIONS = "space_stations"
     CACHE_ASSIGNMENTS_V1 = "assignments_v1"
     CACHE_GLOBAL_EVENTS = "global_events"  # 旧磁盘缓存兼容
-    CACHE_STEAM_METADATA = "steam_metadata"
 
     def __init__(
         self,
@@ -870,17 +869,15 @@ class HelldiversService:
     async def _steam_hero_path(
         self,
         parsed: ParsedSteamContent,
-        metadata: dict[str, Any] | None,
     ) -> Path | None:
+        """下载帖子自带的头图；无图时由渲染器回退到捆绑的当前债券横幅。
+
+        不再使用商店 appdetails 的 header_image：该接口在国内网络长期不可达，
+        且商店美术与当前战争债券版本脱节，会把过期宣传图当背景。
+        """
         if not self.steam_image_enabled or self.remote_image_cache is None:
             return None
-        candidates = list(parsed.image_candidates)
-        if isinstance(metadata, dict):
-            for key in ("header_image", "capsule_image", "background"):
-                value = metadata.get(key)
-                if isinstance(value, str) and value.startswith("https://"):
-                    candidates.append(value)
-        for url in candidates[:6]:
+        for url in list(parsed.image_candidates)[:6]:
             path = await self.remote_image_cache.get(url)
             if path is not None:
                 return path
@@ -892,14 +889,7 @@ class HelldiversService:
             return []
         update = updates[0] if isinstance(updates[0], dict) else {}
         title, translated = await self._prepare_steam_content(update)
-        metadata = await self.cache.get(self.CACHE_STEAM_METADATA)
-        if metadata is None:
-            metadata = await self.client.fetch_steam_metadata()
-            if metadata is not None:
-                await self.cache.set(self.CACHE_STEAM_METADATA, metadata)
-        hero = await self._steam_hero_path(
-            translated, metadata if isinstance(metadata, dict) else None
-        )
+        hero = await self._steam_hero_path(translated)
         if self.steam_renderer is None:
             return []
         return await asyncio.to_thread(
@@ -948,8 +938,21 @@ class HelldiversService:
                 return ""
             return cached_text
 
-        translated = await self.translator.translate_text(preapply_glossary(extract))
-        if translated and translated != extract:
+        # 送译与判定的基线必须是同一个字符串：translator 失败时原样返回入参，
+        # 若拿预处理前的 extract 对比，会把预处理文本误判成译文并永久缓存。
+        preapplied = preapply_glossary(extract)
+        if preapplied != extract and not _has_translatable_english(preapplied):
+            # 术语预替换已覆盖全部英文，预处理结果即终态译文。
+            await self.translation_cache.store(
+                "wiki",
+                item_id,
+                extract,
+                preapplied,
+                metadata={"title": title, "fallback": False},
+            )
+            return preapplied
+        translated = await self.translator.translate_text(preapplied)
+        if translated and translated != preapplied:
             await self.translation_cache.store(
                 "wiki",
                 item_id,
@@ -1275,10 +1278,12 @@ class HelldiversService:
             translated_values = await self.translator.translate_texts(payload)
             if len(translated_values) < len(items):
                 failed.extend(items[len(translated_values) :])
-            for (source, cache_id), translated in zip(
-                items, translated_values, strict=False
+            # 送译与判定基线一致：失败时 translator 返回入参（payload 元素），
+            # 与 preapply 后的文本对比才能识别"未翻译"，避免把预处理文本当译文缓存。
+            for (source, cache_id), sent, translated in zip(
+                items, payload, translated_values, strict=False
             ):
-                final = translated if translated and translated != source else source
+                final = translated if translated and translated != sent else source
                 if final != source:
                     await self.translation_cache.store(
                         "companion_page_v3",

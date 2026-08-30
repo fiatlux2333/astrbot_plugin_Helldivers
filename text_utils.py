@@ -67,17 +67,49 @@ def format_time_hours(seconds: Any) -> str:
     return "0小时"
 
 
-def format_iso_time(time_str: str | None) -> str:
-    if not time_str:
+_EPOCH_FLOOR = 100_000_000  # 低于此值的数字不视为 Unix 时间戳，避免脏数据变成 1970 年
+
+
+def _format_epoch(number: float) -> str:
+    if number > 10_000_000_000:
+        number /= 1000.0  # 毫秒时间戳
+    if number < _EPOCH_FLOOR:
         return "未知时间"
     try:
-        dt = datetime.fromisoformat(str(time_str).replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        local_dt = dt.astimezone()
-        return local_dt.strftime("%Y-%m-%d %H:%M:%S")
-    except (ValueError, AttributeError, TypeError):
+        dt = datetime.fromtimestamp(number, timezone.utc)
+    except (OSError, OverflowError, ValueError):
         return "未知时间"
+    return dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def format_iso_time(time_str: str | int | float | None) -> str:
+    """格式化时间显示；兼容 ISO 字符串与 Unix 时间戳（秒/毫秒，int/float/数字字符串）。
+
+    Steam 官方接口的 ``date`` 字段是秒级时间戳，DSS 的 ``electionEnd`` 等字段
+    也可能以数字下发，不能只按 ISO 解析。
+    """
+    if not time_str:
+        return "未知时间"
+    if isinstance(time_str, (int, float)):
+        try:
+            return _format_epoch(float(time_str))
+        except OverflowError:
+            # float() 换算超大整数（如 10**400）会溢出
+            return "未知时间"
+    text = str(time_str).strip()
+    if not text:
+        return "未知时间"
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            number = float(text)
+        except ValueError:
+            return "未知时间"
+        return _format_epoch(number)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def truncate_at_boundary(content: str, max_length: int) -> str:

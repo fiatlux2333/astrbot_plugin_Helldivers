@@ -403,24 +403,6 @@ class HD2Client:
         events = data.get("globalEvents")
         return events if isinstance(events, list) else []
 
-    async def fetch_steam_app_details(
-        self, appid: int | None = None
-    ) -> Optional[dict[str, Any]]:
-        """获取 Steam 商店元数据，用于新闻无配图时的官方横幅。"""
-        appid = self.steam_appid if appid is None else max(1, int(appid))
-        url = (
-            "https://store.steampowered.com/api/appdetails"
-            f"?appids={appid}&l=schinese&cc=cn"
-        )
-        data = await self.get_json(url)
-        if not isinstance(data, dict):
-            return None
-        item = data.get(str(appid))
-        if not isinstance(item, dict) or not item.get("success"):
-            return None
-        details = item.get("data")
-        return details if isinstance(details, dict) else None
-
     async def fetch_steam_updates_official(
         self, appid: int | None = None, count: int | None = None
     ) -> Optional[list[dict[str, Any]]]:
@@ -487,9 +469,6 @@ class HD2Client:
             "[HD2] Steam official news unavailable; using community fallback"
         )
         return await self.fetch_steam_updates_community()
-
-    async def fetch_steam_metadata(self) -> Optional[dict[str, Any]]:
-        return await self.fetch_steam_app_details()
 
     async def fetch_war_v1(self) -> Optional[dict[str, Any]]:
         data = await self.get_json("/api/v1/war")

@@ -176,15 +176,21 @@ def _command_handler(
         )
         if plugin is None or event is None:
             raise TypeError("无法从 AstrBot handler 参数中识别插件实例和消息事件")
-        event.stop_event()
         result = func(plugin, event)
-        if inspect.isasyncgen(result):
-            async for item in result:
-                yield item
-        else:
-            awaited = await result
-            if awaited is not None:
-                yield awaited
+        try:
+            if inspect.isasyncgen(result):
+                async for item in result:
+                    yield item
+            else:
+                awaited = await result
+                if awaited is not None:
+                    yield awaited
+        finally:
+            # 终止事件必须放在全部 yield 送达之后：调度器一旦看到 stop 标记就
+            # 不再推进 handler，提前 stop 会把多段回复截断成只剩第一段。
+            # 零输出路径下 stop_event 自动补位的 stopped result（或调度器因
+            # stop 直接弃置管道）会拦住默认 LLM 兜底，行为与旧版一致。
+            event.stop_event()
 
     return wrapper
 

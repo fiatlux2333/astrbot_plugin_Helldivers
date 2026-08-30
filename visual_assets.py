@@ -7,6 +7,7 @@ matching pre-rendered PNG files so Pillow remains the only image dependency.
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import re
 from functools import lru_cache
@@ -16,6 +17,8 @@ from typing import Literal, Sequence, TypeAlias
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 from .asset_resolver import AssetResolver, AssetResolverError
+
+logger = logging.getLogger(__name__)
 
 RGB: TypeAlias = tuple[int, int, int]
 RGBA: TypeAlias = tuple[int, int, int, int]
@@ -38,6 +41,7 @@ _LOGICAL_ASSET_IDS = {
     "user/map.png": "map.reference",
     "user/map_template.png": "template.map",
     "user/warfront_template.png": "template.warfront",
+    "user/steam_hero.png": "steam.hero",
     "global_events/super_earth_flag.png": "global_event.default_flag",
     "tactical/eagle_storm.png": "tactical.eagle_storm",
     "tactical/heavy_ordnance.png": "tactical.heavy_ordnance",
@@ -50,7 +54,8 @@ _LOGICAL_ASSET_IDS = {
 def _asset_resolver() -> AssetResolver | None:
     try:
         return AssetResolver(asset_root=ASSET_ROOT, manifest_path=_MANIFEST_PATH)
-    except (AssetResolverError, OSError):
+    except (AssetResolverError, OSError) as exc:
+        logger.warning("[HD2] asset resolver 初始化失败，登记资产全部停用: %s", exc)
         return None
 
 
@@ -212,6 +217,11 @@ def asset_image(name: str | Path) -> Image.Image | None:
                 return _prepare_logical_asset(key, resolver.load_image(resolved))
         except (AssetResolverError, OSError, ValueError):
             pass
+        logger.warning(
+            "[HD2] 资产未通过 manifest 校验（sha256 不匹配或文件缺失），已停用并回退: %s (logical_id=%s)",
+            key,
+            logical_id,
+        )
         # Manifest-controlled assets must not bypass checksum and type validation.
         return None
     # Non-manifest assets such as defense/major-order emblems remain bundled paths.

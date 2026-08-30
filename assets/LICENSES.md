@@ -5,14 +5,15 @@ Unless noted below, SVG and PNG files in this directory are original fan-art-lik
 ## Provenance
 
 - The artwork was constructed from original vector primitives: polygons, ellipses, lines, rings, stars, shields, and abstract mechanical or biological silhouettes.
-- No Helldivers 2 game screenshot, Galactic War Web (GWW) screenshot, Discord/Steam image, extracted game texture, official logo file, or traced third-party artwork was used.
+- Unless noted below, no Helldivers 2 game screenshot, Galactic War Web (GWW) screenshot, Discord/Steam image, extracted game texture, official logo file, or traced third-party artwork was used.
 - The designs use broad fictional concepts and color associations to make Super Earth, the Democracy Space Station (DSS), Automatons, Terminids, Illuminate, defense operations, major orders, and DSS tactical actions recognizable in plugin interfaces.
-- Every runtime PNG was rendered locally from the corresponding SVG design and retains an alpha channel. Pillow is the only runtime image dependency; the SVG files are editable source masters.
+- Every original runtime PNG was rendered locally from the corresponding SVG design and retains an alpha channel. Pillow is the only runtime image dependency; the SVG files are editable source masters.
 - `global_events/super_earth_flag.*` is an original stylized flag illustration and is not a copy of an in-game or promotional image.
 - `tactical/eagle_storm.*`, `tactical/orbital_blockade.*`, and `tactical/heavy_ordnance.*` are user-provided DSS tactical icons. Their SVG source credits Dogo314; the bundled PNGs are direct local rasterizations of those sources.
 - `user/dss.png` is the user-provided DSS reference image used by the DSS report renderer.
 - `user/super_earth_flag.png` is the user-provided Super Earth flag reference used for major-order and global-event artwork.
 - `user/*_template.png` files are user-provided visual references used as darkened cockpit backplates beneath dynamic report data.
+- `user/steam_hero.png` is the official Helldivers 2 "Devoid of Liberty" key art (store banner, downscaled crop, obtained via helldivers.wiki.gg). © Arrowhead Game Studios; bundled as the /steam card hero for the current warbond. Replace this file (and its manifest sha256) when the warbond rotates.
 
 ## License
 
