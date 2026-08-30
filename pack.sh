@@ -37,7 +37,12 @@ zip -r -X "$ZIP" . \
 
 SIZE=$(stat -c %s "$ZIP" 2>/dev/null || stat -f %z "$ZIP")
 MB=$(awk "BEGIN{printf \"%.1f\", $SIZE/1048576}")
-COUNT=$(zip -l "$ZIP" | tail -1 | awk '{print $2}')
+# 注意：zip 的 -l 是创建模式的换行转换选项，对已有压缩包会以 "nothing to do"
+# 退出（码 12）；列目录必须用 unzip -l。
+COUNT=$(unzip -l "$ZIP" | tail -1 | awk '{print $2}')
+if [ -z "$COUNT" ]; then
+  COUNT=$(python3 -c "import zipfile,sys;print(len(zipfile.ZipFile(sys.argv[1]).namelist()))" "$ZIP")
+fi
 
 echo ""
 echo "✅ 打包完成: $ZIP"
