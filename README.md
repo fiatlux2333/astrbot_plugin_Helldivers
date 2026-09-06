@@ -148,11 +148,12 @@ docker run -d --name browserless --restart unless-stopped --shm-size=2g \
 | `translation_model` | string | `gpt-4o-mini` | OpenAI 兼容模型名 |
 | `translation_stream` | bool | `false` | 流式响应；免费/慢速模型建议关闭 |
 | `translation_max_tokens` | int | `1200` | 翻译输出上限（16 条短语约需 800~1000）；0=不限制 |
-| `translation_timeout` | int | `20` | 单次翻译超时（秒） |
+| `translation_timeout` | int | `20` | 单次翻译超时（秒）；慢速模型/批量送译建议 60+ |
 | `translation_target_lang` | string | `zh-CN` | 目标语言 |
 | `translation_retry_fallback_seconds` | int | `180` | 翻译失败状态的短期缓存时长（秒） |
 | `translation_error_cooldown_seconds` | int | `120` | 接口返回 429/5xx 后的暂停时长（秒） |
-| `drop_untranslated_content` | bool | `true` | 翻译失败时剔除明显英文正文 |
+| `translation_min_interval_seconds` | int | `0` | 客户端限速：API 有每分钟 N 次配额时填 60/N（如 5 次/分钟填 12）；0=不限 |
+| `drop_untranslated_content` | bool | `true` | 翻译失败时剔除明显英文正文；限流期间例外，保留英文并稍后自动补翻 |
 
 OpenAI 兼容配置示例：
 

@@ -154,6 +154,14 @@ def _strip_cmd(text: str, names: set[str]) -> list[str]:
     return args
 
 
+def _planet_search_query(value: str) -> str:
+    """planet 目标 value 可能带 `_(index)` 编号后缀，文本查询用纯星球名。"""
+    name = value
+    if name.endswith(")") and "_(" in name:
+        name = name.rsplit("_(", 1)[0]
+    return name.replace("_", " ")
+
+
 def _command_handler(
     func: Callable[..., AsyncGenerator[Any, None]],
 ) -> Callable[..., AsyncGenerator[Any, None]]:
@@ -373,6 +381,9 @@ class HelldiversPlugin(Star):
             ),
             max_tokens=int(
                 self._cfg("translation_max_tokens", 1200) or 0
+            ),
+            min_interval=float(
+                self._cfg("translation_min_interval_seconds", 0) or 0
             ),
         )
         logger.info("[HD2] translation provider: %s", translator.diagnostic())
@@ -1380,7 +1391,19 @@ class HelldiversPlugin(Star):
                 "hellpad/planets/"
             ):
                 target = parse_companion_planet_target(query)
-                fallback_query = target.value.replace("_", " ")
+                if target.value.endswith(")"):
+                    fallback_query = _planet_search_query(target.value)
+                else:
+                    # 旧格式链接（无编号后缀）会被新版站点弹回首页，
+                    # 用战争数据把编号补全后再构建目标。
+                    err, _, slug = await self._svc().resolve_companion_planet(
+                        _planet_search_query(target.value)
+                    )
+                    if err or not slug:
+                        yield event.plain_result(err or "❌ 无法解析该星球。")
+                        return
+                    target = parse_companion_planet_target(slug)
+                    fallback_query = _planet_search_query(target.value)
             else:
                 err, canonical_name, slug = await self._svc().resolve_companion_planet(
                     query
@@ -1394,7 +1417,7 @@ class HelldiversPlugin(Star):
                     except CompanionTargetError:
                         yield event.plain_result(err or "❌ 无法解析该星球。")
                         return
-                    fallback_query = target.value.replace("_", " ")
+                    fallback_query = _planet_search_query(target.value)
                 else:
                     target = parse_companion_planet_target(slug)
                     fallback_query = canonical_name

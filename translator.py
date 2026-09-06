@@ -39,6 +39,7 @@ class TranslationService:
         fallback_ttl: int = 900,
         error_cooldown: int = 60,
         max_tokens: int = 0,
+        min_interval: float = 0,
     ) -> None:
         self.api_url = (api_url or "").strip()
         self.timeout = aiohttp.ClientTimeout(total=timeout)
@@ -70,7 +71,16 @@ class TranslationService:
         # 1000-4000 tokens of rambling JSON/explanation, taking 30-90s and
         # tripping every timeout in the pipeline.  0 means "do not send".
         self.max_tokens = max(0, int(max_tokens or 0))
+        # Client-side pacing for tight per-minute quotas (e.g. 5 req/min):
+        # space requests at least this many seconds apart so we never trip
+        # the provider's 429.  0 disables pacing.
+        self.min_interval = max(0.0, float(min_interval or 0))
+        self._next_request_at = 0.0
         self._openai_cooldown_until = 0.0
+        # 请求级失败（超时/网络异常）的瞬态窗口：与 429/5xx 冷却不同，
+        # 这些失败不代表配额耗尽，但同样不应被上层当成"翻不动"写负缓存。
+        self.transient_failure_window = 60.0
+        self._transient_failure_until = 0.0
         self._last_cooldown_log = 0.0
         self.mode = self._resolve_mode()
 
@@ -81,6 +91,11 @@ class TranslationService:
             self.mode == "openai"
             and time.monotonic() < self._openai_cooldown_until
         )
+
+    def in_transient_failure(self) -> bool:
+        """Whether a request-level failure (timeout/network) happened recently."""
+
+        return time.monotonic() < self._transient_failure_until
 
     def _resolve_mode(self) -> str:
         if self.requested_mode != "auto":
@@ -122,6 +137,7 @@ class TranslationService:
             "model": self.model,
             "stream": self.stream,
             "max_tokens": self.max_tokens,
+            "min_interval": self.min_interval,
             "key_present": bool(self.api_key),
             "target_lang": self.target_lang,
             "error_cooldown": self.error_cooldown,
@@ -519,7 +535,7 @@ class TranslationService:
             translated = await self._translate_openai(text, to_lang)
             # _translate_openai 失败时返回原文，保留原文比丢掉更安全
             results.append(translated if translated else text)
-            if self.in_cooldown():
+            if self.in_cooldown() or self.in_transient_failure():
                 break
         if len(results) < len(texts):
             results.extend(texts[len(results) :])
@@ -557,6 +573,21 @@ class TranslationService:
                 now = time.monotonic()
                 if now < self._openai_cooldown_until:
                     return ""
+                # Space requests min_interval apart so tight per-minute
+                # quotas (e.g. 5 req/min free tiers) are never exceeded.
+                # Claim the slot FIRST and advance the pointer atomically
+                # (no await between read and write), then sleep until our
+                # own slot — waking-then-claiming would let several tasks
+                # read the same target time and all fire together.
+                if self.min_interval > 0:
+                    slot = max(self._next_request_at, now)
+                    self._next_request_at = slot + self.min_interval
+                    wait = slot - now
+                    if wait > 0:
+                        await asyncio.sleep(wait)
+                        # Cooldown may have kicked in while we waited.
+                        if time.monotonic() < self._openai_cooldown_until:
+                            return ""
                 session = await self._ensure_session()
                 urls = self._chat_urls()
                 for url_index, chat_url in enumerate(urls):
@@ -617,6 +648,11 @@ class TranslationService:
         except asyncio.CancelledError:
             raise
         except Exception as e:
+            # 超时/网络异常与 429/5xx 一样视作瞬态：慢速模型（2~15 t/s）
+            # 的批量输出很容易撞上超时，若被上层当成"翻不动"会投毒负缓存。
+            self._transient_failure_until = (
+                time.monotonic() + self.transient_failure_window
+            )
             logger.warning(f"[HD2] openai 翻译失败: {e}")
             return ""
 

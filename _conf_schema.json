@@ -276,6 +276,7 @@
   "translation_timeout": {
     "description": "翻译请求超时（秒）",
     "type": "int",
+    "hint": "慢速模型（输出 2~15 t/s）或批量送译时输出更长，建议 60 以上避免批量被超时截断",
     "default": 20
   },
   "translation_target_lang": {
@@ -295,10 +296,16 @@
     "hint": "OpenAI 兼容接口返回 429/567/5xx 后暂停翻译请求，避免拥塞时连续漏翻",
     "default": 120
   },
+  "translation_min_interval_seconds": {
+    "description": "翻译请求最小间隔（秒）",
+    "type": "int",
+    "hint": "客户端主动限速：API 有每分钟 N 次配额时填 60/N（如 5 次/分钟填 12），从源头避免 429；0 为不限",
+    "default": 0
+  },
   "drop_untranslated_content": {
     "description": "剔除未翻译英文内容",
     "type": "bool",
-    "hint": "启用后翻译失败或译文等于原文时，不再把明显英文正文发送出去",
+    "hint": "启用后翻译失败或译文等于原文时，不再把明显英文正文发送出去；翻译接口限流（429/冷却）期间例外——保留英文原文并稍后自动补翻",
     "default": true
   },
   "rotation_dispatches": {

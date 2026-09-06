@@ -38,14 +38,23 @@ class CompanionTargetTests(unittest.TestCase):
         self.assertEqual(direct.viewport, (800, 1000))
 
     def test_planet_slug_and_url_are_normalized(self) -> None:
-        direct = parse_companion_planet_target("Super Earth")
-        linked = parse_companion_planet_target(
-            "https://helldiverscompanion.com/#hellpad/planets/super_earth"
+        # 2026-08 网站改版：详情路由要求 `_(index)` 编号后缀
+        bare = parse_companion_planet_target("Super Earth")
+        self.assertEqual(bare.value, "super_earth")
+        self.assertEqual(
+            bare.url,
+            "https://helldiverscompanion.com/#hellpad/planets/super_earth",
         )
-        self.assertEqual(direct, linked)
-        self.assertEqual(direct.value, "super_earth")
-        self.assertEqual(direct.viewport, (2560, 1440))
-        self.assertEqual(direct.clip, (0, 0, 2560, 1440))
+        linked = parse_companion_planet_target(
+            "https://helldiverscompanion.com/#hellpad/planets/luxuriant_(268)"
+        )
+        self.assertEqual(linked.value, "luxuriant_(268)")
+        self.assertEqual(
+            linked.url,
+            "https://helldiverscompanion.com/#hellpad/planets/luxuriant_(268)",
+        )
+        self.assertEqual(linked.viewport, (2560, 1440))
+        self.assertEqual(linked.clip, (0, 0, 2560, 1440))
 
     def test_fixed_news_and_dss_targets_are_trusted(self) -> None:
         news = companion_latest_news_target()
@@ -223,6 +232,52 @@ class CompanionScreenshotClientTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(image.size, (770, 841))
         finally:
             await runner.cleanup()
+
+
+
+class ScreenshotPipelineStructureTests(unittest.TestCase):
+    """防止截图调用被误挂到翻译分支（2026-08-30 曾因此翻译开启时全量丢图）。"""
+
+    def test_page_screenshot_not_nested_under_translation_branch(self) -> None:
+        import ast
+
+        source_path = Path(__file__).resolve().parent.parent / "companion_screenshot.py"
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+
+        fns = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "_capture_uncached"
+        ]
+        self.assertTrue(fns, "应存在 _capture_uncached 函数")
+
+        screenshot_calls = []
+        for fn in fns:
+            parents = {}
+            for parent in ast.walk(fn):
+                for child in ast.iter_child_nodes(parent):
+                    parents[child] = parent
+            for node in ast.walk(fn):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "screenshot"
+                ):
+                    screenshot_calls.append((node, parents))
+
+        self.assertTrue(screenshot_calls, "应存在 page.screenshot 调用")
+
+        for call, parents in screenshot_calls:
+            cur = parents.get(call)
+            while cur is not None:
+                if isinstance(cur, ast.If):
+                    self.assertNotIn(
+                        "translate_callback",
+                        ast.unparse(cur.test),
+                        "page.screenshot 不得嵌套在翻译开关分支内",
+                    )
+                cur = parents.get(cur)
 
 
 if __name__ == "__main__":

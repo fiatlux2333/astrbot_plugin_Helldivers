@@ -22,10 +22,12 @@ COMPANION_ORIGIN = "https://helldiverscompanion.com/"
 COMPANION_HOST = "helldiverscompanion.com"
 
 _NEWS_ROUTE_RE = re.compile(r"^hellpad/gww/news/(?P<id>\d{1,10})$")
+# 2026-08 网站改版：详情路由要求带星球编号后缀 `_{(index)}`，不带编号的
+# 旧格式（如 #hellpad/planets/luxuriant）会被弹回首页。
 _PLANET_ROUTE_RE = re.compile(
-    r"^hellpad/planets/(?P<slug>[a-z0-9][a-z0-9_-]{0,63})$"
+    r"^hellpad/planets/(?P<slug>[a-z0-9][a-z0-9_-]{0,63}?)(?:_\((?P<index>\d{1,6})\))?$"
 )
-_PLANET_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_PLANET_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}(?:_\(\d{1,6}\))?$")
 
 _CLEANUP_SCRIPT = r"""
 (() => {
@@ -99,8 +101,8 @@ _PREPARE_CAPTURE_SCRIPT = r"""
     })[0] || null;
     root = details?.closest(".noselect.inner") || details;
   } else if (kind === "planet") {
-    root = document.querySelector(".entire_page") ||
-           document.querySelector(".page_wrapper");
+    // 2026-08 网站改版后 .entire_page/.page_wrapper 已不存在，
+    // 星球卡片文本随整页一起提取即可。
   }
   root ||= kind === "news_latest"
     ? (document.querySelector("main") || document.body)
@@ -160,7 +162,7 @@ async () => {
   try {
     // 1. go to settings and wait for the row to render
     location.hash = "settings";
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 75; i++) {
       if (hasInactiveText()) break;
       await sleep(200);
     }
@@ -197,7 +199,7 @@ async () => {
     await sleep(500); // let localStorage persist the change
 
     // 3. wait for the fuller card list
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 75; i++) {
       const count = document.querySelectorAll(".planets-list > *").length;
       if (count > 10) return true;
       await sleep(200);
@@ -340,15 +342,20 @@ def parse_companion_planet_target(value: str) -> CompanionTarget:
     match = _PLANET_ROUTE_RE.fullmatch(fragment.casefold())
     if match is not None:
         slug = match.group("slug")
+        if match.group("index"):
+            slug = f"{slug}_({match.group('index')})"
     else:
         slug = re.sub(r"\s+", "_", fragment.casefold().strip())
         if _PLANET_SLUG_RE.fullmatch(slug) is None:
             raise CompanionTargetError(
-                "星球参数仅支持英文 slug，例如 meissa 或 super_earth"
+                "星球参数仅支持英文 slug 或带编号的星球链接，"
+                "例如 meissa、super_earth 或 luxuriant_(268)"
             )
     return CompanionTarget(
         kind="planet",
         value=slug,
+        # 2026-08 网站改版：详情路由要求 `_{(index)}` 编号后缀，index 由
+        # services.resolve_companion_planet 从战争数据补全后再传入。
         url=f"{COMPANION_ORIGIN}#hellpad/planets/{slug}",
         label=f"Helldivers Companion 星球：{slug.upper()}",
         viewport=(2560, 1440),
@@ -709,6 +716,7 @@ class CompanionPlaywrightClient:
         if playwright is not None:
             await playwright.stop()
 
+
     async def capture(self, target: CompanionTarget, *, force: bool = False) -> Path:
         output = self.output_dir / (
             f"playwright_v9_{self._cache_namespace}_{self._cache_key(target)}"
@@ -767,6 +775,7 @@ class CompanionPlaywrightClient:
         try:
             context = await browser.new_context(
                 viewport={"width": width, "height": height},
+                # planet 是整页 2560×1440 截图
                 device_scale_factor=1,
                 locale="en-US",
                 ignore_https_errors=True,
@@ -850,16 +859,26 @@ class CompanionPlaywrightClient:
                                ) !== null;
                       }
                       if (kind === "planet") {
-                        return document.querySelector(
-                          ".entire_page, .page_wrapper, [class*='planet'], [class*='Planet']"
-                        ) !== null || text.includes(expected);
+                        // 2026-08 网站改版：详情路由要求 `_{(index)}` 编号
+                        // 后缀，缺后缀会被弹回首页——hash 离开 planets 路由
+                        // 即视为未就绪（宁可超时走 stale 也不截首页）。
+                        if (!window.location.hash
+                          .toLowerCase()
+                          .startsWith("#hellpad/planets/")
+                        ) {
+                          return false;
+                        }
+                        return text.includes(expected);
                       }
                       return text.includes(expected);
                     }
                     """,
                     arg={
                         "kind": target.kind,
-                        "expected": target.value.replace("_", " ").upper(),
+                        # value 可能带 `_(index)` 编号后缀，页面文本只含星球名
+                        "expected": target.value.split("_(")[0]
+                        .replace("_", " ")
+                        .upper(),
                     },
                     timeout=load_timeout,
                 )
@@ -959,7 +978,7 @@ class CompanionPlaywrightClient:
                 try:
                     ok = await asyncio.wait_for(
                         page.evaluate(_COMPANION_SHOW_INACTIVE_SCRIPT),
-                        timeout=min(10.0, max(3.0, self.timeout / 4)),
+                        timeout=min(25.0, max(8.0, self.timeout / 3)),
                     )
                     logger.info(
                         "[HD2] Companion show-inactive 切换完成 ok=%s", bool(ok)

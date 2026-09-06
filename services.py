@@ -7,7 +7,7 @@ import copy
 import hashlib
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from astrbot.api import logger
 
@@ -622,6 +622,11 @@ class HelldiversService:
             )
             return self._restore_dispatch_planets(translated, replacements)
 
+        if self._translation_rate_limited():
+            # 限流/超时属瞬态失败：不写负缓存、不剔除，先回退原文，
+            # 等下一个轮转周期补翻。
+            return self._restore_dispatch_planets(original, replacements)
+
         # 失败也缓存原文，降低重复请求
         await self.translation_cache.store(
             "dispatches",
@@ -797,6 +802,11 @@ class HelldiversService:
             )
         return result
 
+    # steam 卡片批量送译的分块上限：单请求最多 8 段或 800 字符，避免
+    # max_tokens 截断批量 JSON 触发逐条修复、重新打满每分钟配额。
+    _STEAM_BATCH_MAX_ITEMS = 8
+    _STEAM_BATCH_MAX_CHARS = 800
+
     async def _prepare_steam_content(
         self, update: dict[str, Any]
     ) -> tuple[str, ParsedSteamContent]:
@@ -804,53 +814,93 @@ class HelldiversService:
         title = str(update.get("title") or "Steam Update")
         content = str(update.get("content") or update.get("contents") or "")
         parsed = parse_steam_content(content)
-        display_title = await self._translate_cached_text(
-            "steam_card", f"{item_id}:title", title
+
+        # 两段式翻译：先同步遍历一遍收集全部待译槽位（长度预算的推进只
+        # 取决于源文本），未命中缓存的槽位批量送 LLM——一张卡从 20+ 个
+        # 请求降到几个，避免触发 5 次/分钟类配额的 429——再按同一遍历
+        # 组装译文。
+        slots: dict[str, str] = {}
+        statics: dict[str, str] = {}
+
+        def collect(key: str, text: str) -> str:
+            if not self.enable_translation or len(text.strip()) < 3:
+                statics[key] = text
+                return text
+            # 与 _translate_cached_text 一致：术语预替换后的文本作为缓存
+            # 原文与送译基线；替换后无剩余英文则预处理结果即终态。
+            prepared = preapply_glossary(text)
+            if prepared != text and not _has_translatable_english(prepared):
+                statics[key] = prepared
+                return prepared
+            slots[key] = prepared
+            return ""
+
+        collect("title", title)
+        self._walk_steam_content(parsed, collect)
+        translations = await self._resolve_steam_slots(slots, item_id)
+        translations.update(statics)
+
+        def lookup(key: str, text: str) -> str:
+            return translations.get(key, text)
+
+        display_title = lookup("title", title)
+        translated_blocks = self._walk_steam_content(parsed, lookup)
+        return display_title, ParsedSteamContent(
+            blocks=tuple(translated_blocks),
+            image_candidates=parsed.image_candidates,
         )
 
-        source_blocks = list(parsed.blocks[:28])
+    def _walk_steam_content(
+        self,
+        parsed: ParsedSteamContent,
+        resolve: Callable[[str, str], str],
+    ) -> list[SteamBlock]:
+        """同步遍历 steam 卡片块，resolve(key, text) 返回该槽位最终文本。
+
+        遍历结构与长度预算推进只取决于源文本、与译文无关，因此收集槽位与
+        组装译文复用同一遍历。key 沿用旧缓存键的位置部分（"title"、
+        "block:{index}"、"block:{index}:item:{item_index}"），保证旧缓存
+        仍然命中。
+        """
+        drop = self.drop_untranslated_content
         translated_blocks: list[SteamBlock] = []
         remaining = max(0, self.steam_max_content_length)
-        for index, block in enumerate(source_blocks):
+        for index, block in enumerate(parsed.blocks[:28]):
             if block.kind == "list":
                 source_items = tuple(block.items[:12])
-                translated_items: list[str] = []
+                resolved_items: list[str] = []
                 for item_index, item in enumerate(source_items):
                     if remaining <= 0:
-                        if not self.drop_untranslated_content:
-                            translated_items.append(item)
+                        if not drop:
+                            resolved_items.append(item)
                         continue
-                    translated = await self._translate_cached_text(
-                        "steam_card",
-                        f"{item_id}:block:{index}:item:{item_index}",
-                        item[:remaining],
+                    translated = resolve(
+                        f"block:{index}:item:{item_index}", item[:remaining]
                     )
-                    if translated or not self.drop_untranslated_content:
-                        translated_items.append(translated)
+                    if translated or not drop:
+                        resolved_items.append(translated)
                     remaining -= len(item)
-                if not translated_items and self.drop_untranslated_content:
+                if not resolved_items and drop:
                     continue
                 translated_blocks.append(
                     SteamBlock(
                         "list",
                         level=block.level,
-                        items=tuple(translated_items) or source_items,
+                        items=tuple(resolved_items) or source_items,
                         ordered=block.ordered,
                     )
                 )
                 continue
             if remaining <= 0:
-                if not self.drop_untranslated_content:
+                if not drop:
                     translated_blocks.append(block)
                 continue
             source_text = block.text[:remaining]
-            translated_text = await self._translate_cached_text(
-                "steam_card", f"{item_id}:block:{index}", source_text
-            )
+            translated_text = resolve(f"block:{index}", source_text)
             suffix = block.text[len(source_text) :]
-            if self.drop_untranslated_content and _has_translatable_english(suffix):
+            if drop and _has_translatable_english(suffix):
                 suffix = ""
-            if not translated_text and self.drop_untranslated_content:
+            if not translated_text and drop:
                 remaining = max(0, remaining - len(source_text))
                 continue
             translated_blocks.append(
@@ -861,10 +911,109 @@ class HelldiversService:
                 )
             )
             remaining = max(0, remaining - len(source_text))
-        return display_title, ParsedSteamContent(
-            blocks=tuple(translated_blocks),
-            image_candidates=parsed.image_candidates,
-        )
+        return translated_blocks
+
+    async def _resolve_steam_slots(
+        self,
+        slots: dict[str, str],
+        item_id: str,
+    ) -> dict[str, str]:
+        """批量解析 steam 卡片槽位：先查缓存，未命中的打包送 LLM。
+
+        返回 key -> 最终文本（"" 表示该槽位按配置剔除）。冷却中的失败属
+        瞬态：不写负缓存、以英文原文兜底，等轮转下个周期补翻；只有 API
+        正常响应且"译文等于原文"才持久记为失败。
+        """
+        resolved: dict[str, str] = {}
+        pending: list[tuple[str, str, str]] = []  # (key, cache_id, text)
+        for key, text in slots.items():
+            digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+            cache_id = f"{item_id}:{key}:{digest}"
+            cached = await self.translation_cache.get("steam_card", cache_id)
+            if cached and cached.get("original_text") == text:
+                cached_text = str(cached.get("translated_text") or text)
+                if cached_text != text:
+                    resolved[key] = cached_text
+                elif (
+                    not self.drop_untranslated_content
+                    or not _has_translatable_english(text)
+                ):
+                    resolved[key] = cached_text
+                else:
+                    resolved[key] = ""
+                continue
+            pending.append((key, cache_id, text))
+        if not pending:
+            return resolved
+
+        unresolved: list[tuple[str, str, str]] = []
+        chunk: list[tuple[str, str, str]] = []
+        chunk_chars = 0
+
+        async def flush() -> None:
+            nonlocal chunk, chunk_chars
+            if not chunk:
+                return
+            items, chunk = chunk, []
+            chunk_chars = 0
+            payload = [text for _, _, text in items]
+            translated_values = await self.translator.translate_texts(payload)
+            for position, (key, cache_id, text) in enumerate(items):
+                got = (
+                    translated_values[position]
+                    if position < len(translated_values)
+                    else ""
+                )
+                if got and got != text:
+                    await self.translation_cache.store(
+                        "steam_card", cache_id, text, got
+                    )
+                    resolved[key] = got
+                else:
+                    unresolved.append((key, cache_id, text))
+
+        for entry in pending:
+            text = entry[2]
+            if chunk and (
+                len(chunk) >= self._STEAM_BATCH_MAX_ITEMS
+                or chunk_chars + len(text) > self._STEAM_BATCH_MAX_CHARS
+            ):
+                await flush()
+            chunk.append(entry)
+            chunk_chars += len(text)
+        await flush()
+
+        if not unresolved:
+            return resolved
+        if self._translation_rate_limited():
+            logger.warning(
+                "[HD2] 翻译限流中，steam 卡片 %d 段暂以英文显示，稍后自动补翻",
+                len(unresolved),
+            )
+            for key, _cache_id, text in unresolved:
+                resolved[key] = text
+            return resolved
+        for key, cache_id, text in unresolved:
+            await self.translation_cache.store(
+                "steam_card",
+                cache_id,
+                text,
+                text,
+                success=False,
+                fallback_reason="unchanged",
+            )
+            if not self.drop_untranslated_content or not _has_translatable_english(
+                text
+            ):
+                resolved[key] = text
+            else:
+                resolved[key] = ""
+                logger.warning(
+                    "[HD2] 丢弃未翻译文本 namespace=steam_card item=%s text=%r",
+                    cache_id,
+                    text[:80],
+                )
+        return resolved
 
     async def _steam_hero_path(
         self,
@@ -961,6 +1110,9 @@ class HelldiversService:
                 metadata={"title": title, "fallback": False},
             )
             return translated
+        if self._translation_rate_limited():
+            # 限流/超时属瞬态失败：不写负缓存，直接回退原文摘要。
+            return extract
         final = "" if self.drop_untranslated_content and _has_translatable_english(extract) else extract
         await self.translation_cache.store(
             "wiki",
@@ -1197,6 +1349,11 @@ class HelldiversService:
         if translated and translated != text:
             await self.translation_cache.store(namespace, cache_id, text, translated)
             return translated
+        if self._translation_rate_limited():
+            # 429/5xx 冷却属瞬态失败：不写负缓存（否则 TTL 内轮转命中失败
+            # 条目会放弃重试），也不剔除内容，先以原文兜底，冷却结束后由
+            # 轮转任务自然补翻。
+            return text
         await self.translation_cache.store(
             namespace,
             cache_id,
@@ -1218,6 +1375,15 @@ class HelldiversService:
             text[:80],
         )
         return ""
+
+    def _translation_rate_limited(self) -> bool:
+        """翻译接口是否处于瞬态失败窗口（429/5xx 冷却，或超时/网络异常）。"""
+
+        for name in ("in_cooldown", "in_transient_failure"):
+            checker = getattr(self.translator, name, None)
+            if callable(checker) and checker():
+                return True
+        return False
 
     async def translate_companion_fragments(
         self,
@@ -1432,12 +1598,7 @@ class HelldiversService:
         # Distinguish "translation API is rate-limiting us" (transient) from
         # "some fragments genuinely have no translation" (persistent): the caller
         # can surface a clearer "翻译繁忙" message instead of a generic failure.
-        cooldown_checker = getattr(self.translator, "in_cooldown", None)
-        rate_limited = bool(
-            untranslated_count > 0
-            and callable(cooldown_checker)
-            and cooldown_checker()
-        )
+        rate_limited = untranslated_count > 0 and self._translation_rate_limited()
         return CompanionTranslationResult(
             translations=translations,
             cacheable=untranslated_count == 0,
@@ -1750,8 +1911,9 @@ class HelldiversService:
         if not query:
             return "❌ 用法: /planet <星球名称、编号、slug 或 Companion 链接>", None, None
 
-        normalized = query
-        query_folded = query.casefold()
+        # 用户可能直接输入带下划线的 slug（如 super_earth），统一按空格匹配
+        normalized = query.replace("_", " ")
+        query_folded = normalized.casefold()
         for source_name in known_planet_names():
             translated = lookup_planet_name(source_name)
             if translated and translated.casefold() == query_folded:
@@ -1785,6 +1947,12 @@ class HelldiversService:
         if not canonical_name:
             return "❌ 星球数据缺少名称，无法打开 Companion 页面。", None, None
         slug = re.sub(r"\s+", "_", canonical_name.casefold())
+        # 2026-08 网站改版：详情路由要求 `_{(index)}` 编号后缀，缺后缀会被
+        # 网站弹回首页。index 取战争数据中的星球编号。
+        index = planet_index_safe(selected)
+        if index is None:
+            return "❌ 星球数据缺少编号，无法打开新版 Companion 星球页。", None, None
+        slug = f"{slug}_({index})"
         return "", canonical_name, slug
 
     async def get_planet_image(self, query: str) -> tuple[str, list[Path]]:
