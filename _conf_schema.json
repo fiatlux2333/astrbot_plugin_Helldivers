@@ -25,7 +25,7 @@
   "api_user_agent": {
     "description": "User-Agent",
     "type": "string",
-    "default": "astrbot_plugin_Helldivers/1.8.9"
+    "default": "astrbot_plugin_Helldivers/1.8.10"
   },
   "api_timeout": {
     "description": "API 请求超时（秒）",
