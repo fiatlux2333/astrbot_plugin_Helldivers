@@ -5,12 +5,17 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from .visual_assets import prune_render_outputs
 from typing import Any
 
 from PIL import Image, ImageDraw
 
-from .visual_assets import asset_image, font, paste_contain, wrap_text
+from .visual_assets import (
+    asset_image,
+    font,
+    paste_contain,
+    prune_render_outputs,
+    wrap_text,
+)
 
 
 class DispatchRenderer:

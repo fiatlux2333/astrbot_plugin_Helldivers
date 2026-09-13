@@ -5,12 +5,17 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from .visual_assets import prune_render_outputs
 from typing import Any
 
 from PIL import Image, ImageDraw, ImageOps
 
-from .visual_assets import asset_image, font, text_width, wrap_text
+from .visual_assets import (
+    asset_image,
+    font,
+    prune_render_outputs,
+    text_width,
+    wrap_text,
+)
 
 
 class MajorOrderRenderer:

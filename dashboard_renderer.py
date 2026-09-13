@@ -6,7 +6,6 @@ import time
 import uuid
 from pathlib import Path
 
-from .visual_assets import prune_render_outputs
 from typing import Any
 
 try:
@@ -22,12 +21,14 @@ try:
         ellipsize,
         font,
         paste_contain,
+        prune_render_outputs,
         text_width,
         wrap_text,
     )
 except Exception:  # pragma: no cover
     format_planet = lambda value, default=None: default or str(value)  # type: ignore
     asset_image = None  # type: ignore
+    prune_render_outputs = lambda *a, **k: None  # type: ignore
     paste_contain = None  # type: ignore
 
     try:

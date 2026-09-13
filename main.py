@@ -182,11 +182,10 @@ def _command_handler(
         )
         if plugin is None or event is None:
             raise TypeError("无法从 AstrBot handler 参数中识别插件实例和消息事件")
-        # AstrBot 按原始签名解析出的额外指令参数必须原样转发，否则
-        # 未来某个带参处理器会在包装层丢参报 TypeError。
-        consumed = {id(plugin), id(event)}
-        extra = [arg for arg in args if id(arg) not in consumed]
-        result = func(plugin, event, *extra, **kwargs)
+        # 指令参数按 AstrBot 调用约定全部经 **kwargs 转发；而位置参数里除
+        # 识别出的 plugin/event 外只可能是热重载堆叠残留的陈旧实例，
+        # 一律丢弃——按位置转发会把旧实例当指令参数导致 TypeError。
+        result = func(plugin, event, **kwargs)
         try:
             if inspect.isasyncgen(result):
                 async for item in result:

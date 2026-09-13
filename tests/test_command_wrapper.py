@@ -113,6 +113,43 @@ class CommandHandlerWrapperTests(unittest.TestCase):
             self._run(drive())
         self.assertTrue(event.is_stopped())
 
+    def test_stacked_legacy_args_drop_stale_plugin(self) -> None:
+        """4.16-4.26 热重载残留的堆叠调用 (old, new, event) 必须正常工作。
+
+        位置参数里除识别出的 plugin/event 外只会是陈旧实例，一律丢弃；
+        此前按位置转发会把旧实例当指令参数导致 TypeError。
+        """
+
+        @_command_handler
+        async def handler(plugin: Star, event: AstrMessageEvent):
+            yield "ok"
+
+        old_plugin, plugin, event = _FakePlugin(), _FakePlugin(), _FakeEvent()
+
+        async def drive():
+            return [item async for item in handler(old_plugin, plugin, event)]
+
+        self.assertEqual(self._run(drive()), ["ok"])
+        self.assertTrue(event.is_stopped())
+
+    def test_handler_receives_keyword_params(self) -> None:
+        """AstrBot 以 **kwargs 传指令参数，包装器不得丢参。"""
+
+        @_command_handler
+        async def handler(
+            plugin: Star, event: AstrMessageEvent, name: str = ""
+        ):
+            yield f"name={name}"
+
+        plugin, event = _FakePlugin(), _FakeEvent()
+
+        async def drive():
+            return [
+                item async for item in handler(plugin, event, name="foo")
+            ]
+
+        self.assertEqual(self._run(drive()), ["name=foo"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,7 +5,6 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from .visual_assets import prune_render_outputs
 
 try:
     from PIL import Image, ImageDraw, ImageFilter
@@ -15,10 +14,17 @@ except Exception:  # pragma: no cover
     ImageFilter = None  # type: ignore
 
 try:
-    from .visual_assets import asset_image, font, paste_contain, text_width
+    from .visual_assets import (
+        asset_image,
+        font,
+        paste_contain,
+        prune_render_outputs,
+        text_width,
+    )
 except Exception:  # pragma: no cover
     asset_image = None  # type: ignore
     paste_contain = None  # type: ignore
+    prune_render_outputs = lambda *a, **k: None  # type: ignore
 
     def font(size: int, *, bold: bool = False):
         try:

@@ -8,6 +8,7 @@ import json
 import os
 import re
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlsplit
@@ -748,6 +749,7 @@ class TranslationCache:
         self.SAVE_DEBOUNCE_SECONDS = 1.0
         self._dirty = False
         self._save_handle: asyncio.TimerHandle | None = None
+        self._flush_task: asyncio.Task | None = None
         self.load()
 
     @staticmethod
@@ -775,7 +777,8 @@ class TranslationCache:
 
     def _spawn_flush(self, loop: asyncio.AbstractEventLoop) -> None:
         self._save_handle = None
-        loop.create_task(self.flush())
+        # 持引用防任务被 GC（asyncio 只存弱引用）
+        self._flush_task = loop.create_task(self.flush())
 
     async def flush(self) -> None:
         """立即写盘（关机路径与需要落盘保证的测试用）。"""
@@ -807,7 +810,8 @@ class TranslationCache:
             self._data.pop(key, None)
 
     def _write_payload(self, payload: str) -> None:
-        tmp = self.path.with_suffix(".tmp")
+        # 唯一临时名：并发 flush（去抖与关机交叠）不会互写同一个 .tmp
+        tmp = self.path.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp")
         try:
             tmp.write_text(payload, encoding="utf-8")
             os.replace(tmp, self.path)
