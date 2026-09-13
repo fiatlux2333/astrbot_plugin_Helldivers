@@ -28,6 +28,8 @@ import tempfile
 import uuid
 from collections.abc import Iterable, Mapping
 from pathlib import Path
+
+from .visual_assets import prune_render_outputs
 from typing import Any
 
 try:
@@ -406,7 +408,9 @@ def _load_visual_asset(faction: str, size: int):
                     continue
                 try:
                     if isinstance(asset, (str, Path)):
-                        asset = Image.open(asset)
+                        # with 块确保关闭文件句柄，convert 结果已在内存
+                        with Image.open(asset) as opened:
+                            return opened.convert("RGBA").resize((size, size))
                     if hasattr(asset, "convert") and hasattr(asset, "resize"):
                         return asset.convert("RGBA").resize((size, size))
                 except (OSError, TypeError, ValueError):
@@ -753,6 +757,7 @@ def render_warfront(
             os.fsync(handle.fileno())
         os.replace(temporary_name, destination)
         temporary_name = None
+        prune_render_outputs(destination.parent)
         try:
             directory_fd = os.open(destination.parent, os.O_RDONLY)
             try:

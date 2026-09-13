@@ -16,6 +16,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+from .visual_assets import prune_render_outputs
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -51,6 +53,14 @@ STEAM_DARK_BLUE = (22, 71, 105)
 DIVIDER = (55, 69, 83)
 BULLET = (111, 191, 238)
 _FONT_CACHE: dict[tuple[int, bool], Any] = {}
+
+
+def _safe_block_level(value: Any) -> int:
+    """块层级理论上应为整数；上游脏数据（如 "h2"）按 0 处理而非整卡失败。"""
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -311,7 +321,10 @@ def _coerce_blocks(value: Any) -> tuple[SteamBlock, ...]:
                     SteamBlock(
                         kind,  # type: ignore[arg-type]
                         text=str(item.get("text") or ""),
-                        level=max(0, int(item.get("level") or 0)),
+                        level=max(
+                            0,
+                            _safe_block_level(item.get("level")),
+                        ),
                         items=tuple(
                             str(part)
                             for part in (item.get("items") or [])
@@ -428,6 +441,7 @@ def _write_png_atomic(image: Any, destination: Path) -> Path:
             os.fsync(handle.fileno())
         os.replace(temporary, destination)
         temporary = None
+        prune_render_outputs(Path(destination).parent)
     finally:
         if temporary:
             Path(temporary).unlink(missing_ok=True)

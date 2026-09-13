@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
+
+from .visual_assets import prune_render_outputs
 from typing import Any
 
 from PIL import Image, ImageDraw
@@ -83,5 +85,6 @@ class DispatchRenderer:
             temporary = output.with_suffix(".tmp.png")
             image.save(temporary, format="PNG", optimize=True)
             temporary.replace(output)
+            prune_render_outputs(self.output_dir)
             outputs.append(output)
         return outputs

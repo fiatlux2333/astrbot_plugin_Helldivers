@@ -5,6 +5,8 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
+from .visual_assets import prune_render_outputs
+
 try:
     from PIL import Image, ImageDraw, ImageFilter
 except Exception:  # pragma: no cover
@@ -110,4 +112,5 @@ class AwaitingOrdersRenderer:
         tmp = out.with_suffix(".tmp.png")
         img.save(tmp, format="PNG", optimize=True)
         tmp.replace(out)
+        prune_render_outputs(self.output_dir)
         return out

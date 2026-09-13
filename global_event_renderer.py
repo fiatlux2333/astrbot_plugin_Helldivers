@@ -15,6 +15,8 @@ import uuid
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
+
+from .visual_assets import prune_render_outputs
 from typing import Any, Literal
 
 try:
@@ -110,6 +112,8 @@ def _text_width(draw: Any, text: str, font: Any) -> float:
 
 
 def _wrap(draw: Any, text: str, font: Any, max_width: int, max_lines: int) -> list[str]:
+    # 先完整折行再裁剪：省略号只在真的丢弃了内容（行数超出上限）时出现，
+    # 内容恰好铺满时不加。折行按行独立，截断前缀与逐行提前 break 等价。
     output: list[str] = []
     for raw_line in str(text or "").replace("\r", "").split("\n"):
         raw_line = " ".join(raw_line.split())
@@ -125,15 +129,9 @@ def _wrap(draw: Any, text: str, font: Any, max_width: int, max_lines: int) -> li
             else:
                 output.append(current.rstrip())
                 current = character.lstrip()
-                if len(output) >= max_lines:
-                    break
-        if len(output) >= max_lines:
-            break
         if current:
             output.append(current.rstrip())
-        if len(output) >= max_lines:
-            break
-    if len(output) >= max_lines:
+    if len(output) > max_lines:
         output = output[:max_lines]
         final = output[-1].rstrip("… ")
         while final and _text_width(draw, final + "…", font) > max_width:
@@ -573,10 +571,12 @@ def render_global_event(
 
     destination = Path(output_path)
     try:
-        return _write_png_atomic(image, destination)
+        result = _write_png_atomic(image, destination)
     finally:
         image.close()
         probe.close()
+    prune_render_outputs(destination.parent)
+    return result
 
 
 class GlobalEventRenderer:

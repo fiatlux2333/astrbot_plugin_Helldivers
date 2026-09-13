@@ -17,6 +17,8 @@ import tempfile
 from datetime import UTC, datetime, timedelta, tzinfo
 from functools import lru_cache
 from pathlib import Path
+
+from .visual_assets import prune_render_outputs
 from typing import Any, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -1325,6 +1327,7 @@ class DSSRenderer:
         try:
             image = self._render_image(data, render_now)
             self._atomic_save(image, output)
+            prune_render_outputs(output.parent, keep=60)
             return output
         except Exception:
             logger.exception("DSS tactical renderer failed")

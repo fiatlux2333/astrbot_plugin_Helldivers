@@ -71,6 +71,7 @@ class CacheService:
         self._task: asyncio.Task | None = None
         self._once_task: asyncio.Task | None = None
         self._started = False
+        self._refresh_locks: dict[str, asyncio.Lock] = {}
 
     def register(self, name: str, fetcher: Fetcher) -> None:
         self._fetchers[name] = fetcher
@@ -201,8 +202,15 @@ class CacheService:
         data = await self.get(name)
         if data is not None:
             return data
-        await self.refresh_one(name, force=True)
-        return await self.get(name)
+        # 单飞：冷缓存/上游失败时，并发的同名请求只触发一次抓取，
+        # 其余在锁上等结果，避免对同一 key 的请求风暴。
+        lock = self._refresh_locks.setdefault(name, asyncio.Lock())
+        async with lock:
+            data = await self.get(name)
+            if data is not None:
+                return data
+            await self.refresh_one(name, force=True)
+            return await self.get(name)
 
     async def start(self) -> None:
         if self._started:

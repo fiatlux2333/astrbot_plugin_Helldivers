@@ -798,3 +798,31 @@ def _anchored_position(
 
 def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
+
+
+def prune_render_outputs(
+    directory: str | Path, *, keep: int = 30, pattern: str = "*.png"
+) -> None:
+    """按 mtime 只保留最近 keep 个渲染产物（渲染后兜底清理）。
+
+    部分渲染器每次生成唯一文件名且从不清算，长期运行会积累数百 MB；
+    隐藏的 .tmp 文件跳过，由各自的原子写路径负责。
+    """
+    directory = Path(directory)
+    try:
+        files = sorted(
+            (
+                f
+                for f in directory.glob(pattern)
+                if f.is_file() and not f.name.startswith(".")
+            ),
+            key=lambda f: f.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return
+    for stale in files[keep:]:
+        try:
+            stale.unlink()
+        except OSError:
+            pass

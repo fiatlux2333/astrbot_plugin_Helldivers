@@ -20,8 +20,8 @@ from .plugin_info import USER_AGENT
 class HD2Client:
     """统一的 HD2 API 访问层，带有限次重试 + 全局限流。"""
 
-    RETRY_STATUSES = {429, 500, 502, 503, 504}
-    REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+    RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+    REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
     COMPANION_NEWS_URL = "https://helldiverscompanion.com/api/steam-api/news"
     COMPANION_WAR_DATA_URL = (
         "https://helldiverscompanion.com/api/hell-divers-2-api/get-api-data-live"

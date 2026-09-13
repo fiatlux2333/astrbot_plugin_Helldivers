@@ -42,7 +42,6 @@ from .companion_screenshot import (
     CompanionConfigurationError,
     CompanionPlaywrightClient,
     CompanionScreenshotClient,
-    CompanionScreenshotError,
     CompanionTarget,
     CompanionTargetError,
     companion_dss_target,
@@ -58,7 +57,6 @@ from .global_event_renderer import GlobalEventRenderer
 from .map_renderer import MapRenderer
 from .major_order_renderer import MajorOrderRenderer
 from .plugin_info import (
-    PLUGIN_AUTHOR,
     PLUGIN_NAME,
     PLUGIN_VERSION,
     USER_AGENT,
@@ -184,7 +182,11 @@ def _command_handler(
         )
         if plugin is None or event is None:
             raise TypeError("无法从 AstrBot handler 参数中识别插件实例和消息事件")
-        result = func(plugin, event)
+        # AstrBot 按原始签名解析出的额外指令参数必须原样转发，否则
+        # 未来某个带参处理器会在包装层丢参报 TypeError。
+        consumed = {id(plugin), id(event)}
+        extra = [arg for arg in args if id(arg) not in consumed]
+        result = func(plugin, event, *extra, **kwargs)
         try:
             if inspect.isasyncgen(result):
                 async for item in result:

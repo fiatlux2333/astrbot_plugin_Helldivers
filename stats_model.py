@@ -549,7 +549,8 @@ def build_stats_view_model(
     war_time = _war_time_seconds(status_map, war_map)
     direct_day = _first(status_map, "day", "warDay", "war_day")
     war_day = _integer(direct_day) if direct_day is not None else None
-    if war_day == 0 and direct_day is None:
+    if war_day == 0:
+        # day=0 无意义：回退到按 war_time 推算的战争日
         war_day = None
     if war_day is None and war_time is not None:
         war_day = war_time // 86_400 + 1

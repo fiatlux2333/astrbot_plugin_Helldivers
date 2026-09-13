@@ -14,7 +14,9 @@ import logging
 import math
 import os
 import random
+import threading
 import time
+import uuid
 from collections import Counter, defaultdict
 from functools import lru_cache
 from pathlib import Path
@@ -260,6 +262,7 @@ class MapRenderer:
         )
         self.plot_left = (self.width - self.plot_size) // 2
         self._static_layer = None
+        self._static_layer_lock = threading.Lock()
         self._sprite_cache: dict[tuple[Any, ...], "Image.Image"] = {}
 
     @property
@@ -419,8 +422,13 @@ class MapRenderer:
         return mask
 
     def _build_static_layer(self):
-        if self._static_layer is not None:
-            return self._static_layer.copy()
+        # /map 经 to_thread 并发渲染，懒加载需要互斥，避免半初始化层被旁路读到
+        with self._static_layer_lock:
+            if self._static_layer is None:
+                self._static_layer = self._build_static_layer_unlocked()
+        return self._static_layer.copy()
+
+    def _build_static_layer_unlocked(self):
         try:
             gradient = Image.radial_gradient("L").resize((self.width, self.height))
             inner = Image.new("RGB", (self.width, self.height), _BG_INNER)
@@ -1243,7 +1251,7 @@ class MapRenderer:
             self._last_fingerprint = fingerprint
             return out
 
-        temp = out.with_name(f".{out.name}.{os.getpid()}.tmp")
+        temp = out.with_name(f".{out.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
         try:
             img = self._reference_base()
             reference_mode = img is not None
