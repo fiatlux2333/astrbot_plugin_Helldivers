@@ -51,6 +51,7 @@ except ImportError:  # pragma: no cover - fallback for stripped test envs
     sys.modules["astrbot.api"] = api
 
 from astrbot_plugin_Helldivers.api_client import HD2Client
+from astrbot_plugin_Helldivers.cache import CacheService
 from astrbot_plugin_Helldivers.glossary import preapply_glossary
 from astrbot_plugin_Helldivers.services import HelldiversService
 from astrbot_plugin_Helldivers.translator import TranslationCache, TranslationService
@@ -808,6 +809,57 @@ class SteamCardBatchTranslationTests(unittest.IsolatedAsyncioTestCase):
             sent = [item for call in translator.batch_calls for item in call]
             self.assertNotIn(preapply_glossary(text), sent)
             self.assertIn("旧缓存译文", self._all_texts(parsed))
+
+    async def test_store_debounces_until_flush_persists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = TranslationCache(Path(tmp), provider_fingerprint="p")
+            await cache.store("news", "1", "Original", "译文")
+            # store 不再同步落盘：新实例读不到，flush 后才可见
+            late = TranslationCache(Path(tmp), provider_fingerprint="p")
+            self.assertIsNone(await late.get("news", "1"))
+            await cache.flush()
+            late2 = TranslationCache(Path(tmp), provider_fingerprint="p")
+            self.assertIsNotNone(await late2.get("news", "1"))
+
+    async def test_capacity_eviction_drops_oldest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = TranslationCache(Path(tmp), provider_fingerprint="p")
+            cache.MAX_ENTRIES = 3
+            for i in range(5):
+                await cache.store("news", str(i), f"Original {i}", f"译文 {i}")
+                cache._data[cache._key("news", str(i))]["updated_at"] = 100.0 + i
+            await cache.flush()
+            self.assertEqual(len(cache._data), 3)
+            self.assertIsNone(await cache.get("news", "0"))
+            self.assertIsNotNone(await cache.get("news", "4"))
+
+    async def test_prune_prefixes_keeps_current_item(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = TranslationCache(Path(tmp), provider_fingerprint="p")
+            await cache.store("steam_card", "42:block:0:aaa", "old text", "旧")
+            await cache.store("steam_card", "99:block:0:bbb", "current", "新")
+            await cache.prune_prefixes("steam_card", ["99:"])
+            self.assertIsNone(await cache.get("steam_card", "42:block:0:aaa"))
+            self.assertIsNotNone(await cache.get("steam_card", "99:block:0:bbb"))
+
+    async def test_get_or_refresh_single_flight(self) -> None:
+        calls: list[int] = []
+
+        async def fetcher():
+            calls.append(1)
+            await asyncio.sleep(0.05)
+            return {"value": 1}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = CacheService(Path(tmp), enable_background=False, request_delay=0)
+            cache.register("k", fetcher)
+            results = await asyncio.gather(
+                cache.get_or_refresh("k"),
+                cache.get_or_refresh("k"),
+                cache.get_or_refresh("k"),
+            )
+            self.assertEqual(len(calls), 1)
+            self.assertTrue(all(r == {"value": 1} for r in results))
 
     async def test_rate_limited_warmup_converges_over_two_rounds(self) -> None:
         class QuotaTranslator(_StubSteamTranslator):

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import logging
 import os
 import re
 import time
@@ -743,6 +742,12 @@ class TranslationCache:
         self._lock = asyncio.Lock()
         self.provider_fingerprint = provider_fingerprint
         self.fallback_ttl = max(60, int(fallback_ttl))
+        # 写盘去抖：store 在热路径上每段调用一次，若每次都全量同步落盘，
+        # 会随缓存增长变成 O(全量) 的事件循环阻塞。改为标脏 + 1s 合并写。
+        self.MAX_ENTRIES = 4096
+        self.SAVE_DEBOUNCE_SECONDS = 1.0
+        self._dirty = False
+        self._save_handle: asyncio.TimerHandle | None = None
         self.load()
 
     @staticmethod
@@ -760,13 +765,51 @@ class TranslationCache:
             logger.warning(f"[HD2] load translation cache failed: {e}")
             self._data = {}
 
-    def save(self) -> None:
+    def _mark_dirty(self) -> None:
+        self._dirty = True
+        if self._save_handle is None:
+            loop = asyncio.get_running_loop()
+            self._save_handle = loop.call_later(
+                self.SAVE_DEBOUNCE_SECONDS, self._spawn_flush, loop
+            )
+
+    def _spawn_flush(self, loop: asyncio.AbstractEventLoop) -> None:
+        self._save_handle = None
+        loop.create_task(self.flush())
+
+    async def flush(self) -> None:
+        """立即写盘（关机路径与需要落盘保证的测试用）。"""
+        if self._save_handle is not None:
+            self._save_handle.cancel()
+            self._save_handle = None
+        if not self._dirty:
+            return
+        async with self._lock:
+            if not self._dirty:
+                return
+            self._dirty = False
+            self._enforce_capacity()
+            payload = json.dumps(
+                self._data, ensure_ascii=False, separators=(",", ":")
+            )
+        # JSON 序列化在锁内完成后，磁盘 IO 放线程池，避免阻塞事件循环
+        await asyncio.to_thread(self._write_payload, payload)
+
+    def _enforce_capacity(self) -> None:
+        overflow = len(self._data) - self.MAX_ENTRIES
+        if overflow <= 0:
+            return
+        oldest = sorted(
+            self._data,
+            key=lambda k: float(self._data[k].get("updated_at") or 0),
+        )[:overflow]
+        for key in oldest:
+            self._data.pop(key, None)
+
+    def _write_payload(self, payload: str) -> None:
         tmp = self.path.with_suffix(".tmp")
         try:
-            tmp.write_text(
-                json.dumps(self._data, ensure_ascii=False, separators=(",", ":")),
-                encoding="utf-8",
-            )
+            tmp.write_text(payload, encoding="utf-8")
             os.replace(tmp, self.path)
         except Exception as e:
             logger.warning(f"[HD2] save translation cache failed: {e}")
@@ -818,7 +861,7 @@ class TranslationCache:
         }
         async with self._lock:
             self._data[self._key(content_type, item_id)] = entry
-            self.save()
+            self._mark_dirty()
 
     async def clear_outdated(self, content_type: str, keep_ids: list[str]) -> None:
         keep = set(keep_ids)
@@ -832,4 +875,25 @@ class TranslationCache:
             for k in remove_keys:
                 self._data.pop(k, None)
             if remove_keys:
-                self.save()
+                self._mark_dirty()
+
+    async def prune_prefixes(
+        self, content_type: str, keep_prefixes: list[str]
+    ) -> None:
+        """按前缀保留清理：键带文本摘要（`{content_type}:{item}:{digest}`），
+        精确 id 匹配无法表达"保留当前物品"，用前缀匹配。"""
+        keep = tuple(p for p in keep_prefixes if p)
+        if not keep:
+            return
+        prefix = f"{content_type}:"
+        async with self._lock:
+            remove_keys = [
+                k
+                for k in self._data
+                if k.startswith(prefix)
+                and not k[len(prefix) :].startswith(keep)
+            ]
+            for k in remove_keys:
+                self._data.pop(k, None)
+            if remove_keys:
+                self._mark_dirty()

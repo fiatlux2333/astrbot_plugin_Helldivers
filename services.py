@@ -333,7 +333,7 @@ class HelldiversService:
                 logger.warning(f"[HD2] remote image cache close error: {e}")
         await self.translator.close()
         await self.client.close()
-        self.translation_cache.save()
+        await self.translation_cache.flush()
 
     async def _campaign_trend_loop(self) -> None:
         """定期记录缓存中的战役进度，不额外请求 API。"""
@@ -440,7 +440,10 @@ class HelldiversService:
         if not orders:
             return
         ids = [str(o.get("id", i)) for i, o in enumerate(orders)]
-        await self.translation_cache.clear_outdated("orders", ids)
+        # order_field 键形如 `{id}:{field}:{digest}`，用前缀保留当前订单
+        await self.translation_cache.prune_prefixes(
+            "order_field", [f"{i}:" for i in ids]
+        )
         for order in orders:
             await self._translate_order(order)
             await asyncio.sleep(0.1)
@@ -777,7 +780,10 @@ class HelldiversService:
             return
         latest = updates[:1]
         ids = [str(u.get("id", i)) for i, u in enumerate(latest)]
-        await self.translation_cache.clear_outdated("steam", ids)
+        # steam_message / steam_card 键都带摘要后缀，按物品前缀保留
+        steam_keep = [f"{i}:" for i in ids]
+        await self.translation_cache.prune_prefixes("steam_message", steam_keep)
+        await self.translation_cache.prune_prefixes("steam_card", steam_keep)
         for update in latest:
             if isinstance(update, dict):
                 await self._prepare_steam_content(update)
