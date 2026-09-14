@@ -13,7 +13,10 @@ desc: |
   - Steam 官方更新公告
   - 战线战况
   - Helldivers Wiki 查询
-version: 1.8.10
+  - 军需簿装备/敌人数据库查询
+  - Companion 新闻订阅推送
+  - B 站银河快报监听推送
+version: 1.8.11
 author: 牡蛎
 repo: https://github.com/fiatlux2333/astrbot_plugin_Helldivers
 astrbot_version: ">=4.16,<5"

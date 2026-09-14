@@ -1,6 +1,6 @@
 # 绝地潜兵2情报助手 (astrbot_plugin_Helldivers)
 
-基于 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 的《绝地潜兵2》银河战争情报插件，当前版本 `v1.8.10`。
+基于 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 的《绝地潜兵2》银河战争情报插件，当前版本 `v1.8.11`。
 
 数据来源：Helldivers 2 Community API、Helldivers Companion、Steam News API、helldivers.wiki.gg。常规情报由 Pillow 渲染为中文卡片；`/hd2news`、`/dss`、`/planet`、`/companion` 通过 Playwright 截取 Companion 网页并做术语级中文翻译。内置双层缓存、请求限流重试、官方译名词表（569 条）预替换与 AI 翻译（内置接口或 OpenAI 兼容接口）；翻译提示词实质性改版时通过协议指纹（当前 v4）自动失效旧翻译缓存。
 
@@ -171,6 +171,8 @@ OpenAI 兼容配置示例：
 
 OpenAI 兼容模式按每批 16 条并行翻译 Companion 页面片段；遇到 500/502/503/504 等 2 秒后重试一次，429 或网关错误进入短冷却，失败结果不会长期污染翻译缓存。
 
+翻译链路对限流配额有完整韧性设计：Steam 卡片批量送译（一张卡 3~4 个请求而非逐段 20+）；429/超时等瞬态失败期间保留英文原文兜底、不写失败缓存，接口恢复后由后台轮转自动补翻；只有模型确认返回且译文等于原文才判定为持久失败。翻译缓存为内存 + 磁盘双层，写盘经去抖合并且有 4096 条容量上限。
+
 ### 银河快报
 
 | 配置项 | 类型 | 默认值 | 说明 |
@@ -229,7 +231,7 @@ Cookie 是登录凭据，不要发给他人或提交到仓库。若登录验证�
 3. 个人指令无官方 API，默认使用 Companion 社区 CDN，拒绝超过 3 天的旧快照并按快照年龄校正剩余时间。
 4. 免费/慢速翻译模型建议保持 `translation_stream=false` 与 `translation_max_tokens=1200`；正式模型可适当调大。
 5. `companion_screenshot_cache_ttl` 建议与 `companion_warmup_interval` 保持一致（默认均 300 秒）。
-6. AstrBot 热重载可能残留旧 handler 导致重复回复，完整重启可清理。
+6. AstrBot 4.26.x 热重载可能残留旧 handler 导致重复回复，插件已内置兼容包装器，完整重启可彻底清理。
 7. 官方译名词表在 `assets/glossary/*.json`，修改后需重载插件。
 8. 军需簿数据缓存在插件数据目录 `arsenal/`，删除该目录可强制重新下载；wiki.gg 下载失败时进入 15 分钟退避，期间装备查询不受影响。
 9. Pillow 或中文字体缺失时，图片可能无法生成或中文显示为方框。
