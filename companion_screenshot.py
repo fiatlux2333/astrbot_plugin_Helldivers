@@ -487,114 +487,6 @@ class CompanionScreenshotClient:
             else:
                 self._lock_refs[key] = remaining
 
-    _NEWS_STITCH_MAX_HEIGHT = 3600
-    _NEWS_HEADER_CHROME = 82
-    _NEWS_FOOTER_CHROME = 64
-
-    async def _stitch_news_capture(self, page: Any, temporary: Path) -> bool:
-        """news 页 2026-09 改版后挂在外层 overflow-hidden 壳的内层滚动容器里，
-        元素截图超出视口的部分不会被绘制（成片下方大片黑底）。改为滚轮分段
-        滚动 + 视口裁剪 + 纵向拼接，只覆盖根元素实际渲染的内容。返回 False
-        时调用方回退旧的元素整体截图。"""
-        try:
-            first = await page.evaluate(
-                """() => {
-                  const root = document.querySelector(
-                    '[data-hd2-capture-root="true"]'
-                  );
-                  if (!root) return null;
-                  const r = root.getBoundingClientRect();
-                  return { x: r.x, top: r.top, width: r.width,
-                           height: r.height, viewport: innerHeight };
-                }"""
-            )
-            if not first:
-                return False
-            art_x = max(0, int(first["x"]))
-            art_w = int(
-                min(first["width"], page.viewport_size["width"] - art_x)
-            )
-            root_h = int(first["height"])
-            viewport_h = int(first["viewport"])
-            if art_w < 300 or root_h <= viewport_h * 0.95:
-                return False  # 内容本就在视口内，元素截图即可
-            await page.mouse.move(art_x + art_w / 2, viewport_h / 2)
-            canvas = Image.new(
-                "RGB",
-                (art_w, min(root_h, self._NEWS_STITCH_MAX_HEIGHT)),
-                (12, 16, 24),
-            )
-            prev_end = 0
-            for _ in range(8):
-                probe = await page.evaluate(
-                    """() => {
-                      const root = document.querySelector(
-                        '[data-hd2-capture-root="true"]'
-                      );
-                      return root ? root.getBoundingClientRect().top : null;
-                    }"""
-                )
-                if probe is None:
-                    return False
-                top_now = float(probe)
-                # 根内坐标 = 视口 y - top_now；避开固定头/底栏
-                y0 = max(0.0, self._NEWS_HEADER_CHROME - top_now)
-                y1 = min(
-                    viewport_h - self._NEWS_FOOTER_CHROME - top_now, root_h
-                )
-                if y1 - y0 < 40:
-                    break
-                y0i, y1i = int(y0), int(y1)
-                if y0i > prev_end:
-                    # 平滑滚动过冲会留缝隙：向上滚回对齐
-                    await page.mouse.wheel(0, -(y0i - prev_end))
-                    await page.wait_for_timeout(400)
-                    continue
-                # 等根内图片解码，避免灰占位块进拼图
-                await page.evaluate(
-                    """() => Promise.race([
-                      Promise.all(
-                        Array.from(
-                          document.querySelectorAll(
-                            '[data-hd2-capture-root="true"] img'
-                          )
-                        ).map((img) =>
-                          img.complete
-                            ? Promise.resolve()
-                            : img.decode().catch(() => {})
-                        )
-                      ),
-                      new Promise((r) => setTimeout(r, 2000)),
-                    ])"""
-                )
-                part = await page.screenshot(
-                    type="png",
-                    animations="disabled",
-                    clip={
-                        "x": art_x,
-                        "y": y0i + top_now,
-                        "width": art_w,
-                        "height": y1i - y0i,
-                    },
-                )
-                with Image.open(io.BytesIO(part)) as piece:
-                    canvas.paste(piece.convert("RGB"), (0, y0i))
-                prev_end = y1i
-                if y1i >= root_h - 2 or prev_end >= canvas.height:
-                    break
-                await page.mouse.wheel(0, y1i - y0i)
-                await page.wait_for_timeout(500)
-            if prev_end <= 0:
-                return False
-            canvas.save(temporary, format="PNG", optimize=True)
-            return True
-        except Exception as exc:  # noqa: BLE001 - 拼接失败回退旧路径
-            logger.warning(
-                "[HD2] Companion news 分段拼接截图失败，回退元素整体截图: %s",
-                exc,
-            )
-            return False
-
     def _cache_is_fresh(self, path: Path) -> bool:
         try:
             return (
@@ -1273,6 +1165,114 @@ class CompanionPlaywrightClient:
                 temporary.unlink(missing_ok=True)
             except OSError:
                 pass
+
+    _NEWS_STITCH_MAX_HEIGHT = 3600
+    _NEWS_HEADER_CHROME = 82
+    _NEWS_FOOTER_CHROME = 64
+
+    async def _stitch_news_capture(self, page: Any, temporary: Path) -> bool:
+        """news 页 2026-09 改版后挂在外层 overflow-hidden 壳的内层滚动容器里，
+        元素截图超出视口的部分不会被绘制（成片下方大片黑底）。改为滚轮分段
+        滚动 + 视口裁剪 + 纵向拼接，只覆盖根元素实际渲染的内容。返回 False
+        时调用方回退旧的元素整体截图。"""
+        try:
+            first = await page.evaluate(
+                """() => {
+                  const root = document.querySelector(
+                    '[data-hd2-capture-root="true"]'
+                  );
+                  if (!root) return null;
+                  const r = root.getBoundingClientRect();
+                  return { x: r.x, top: r.top, width: r.width,
+                           height: r.height, viewport: innerHeight };
+                }"""
+            )
+            if not first:
+                return False
+            art_x = max(0, int(first["x"]))
+            art_w = int(
+                min(first["width"], page.viewport_size["width"] - art_x)
+            )
+            root_h = int(first["height"])
+            viewport_h = int(first["viewport"])
+            if art_w < 300 or root_h <= viewport_h * 0.95:
+                return False  # 内容本就在视口内，元素截图即可
+            await page.mouse.move(art_x + art_w / 2, viewport_h / 2)
+            canvas = Image.new(
+                "RGB",
+                (art_w, min(root_h, self._NEWS_STITCH_MAX_HEIGHT)),
+                (12, 16, 24),
+            )
+            prev_end = 0
+            for _ in range(8):
+                probe = await page.evaluate(
+                    """() => {
+                      const root = document.querySelector(
+                        '[data-hd2-capture-root="true"]'
+                      );
+                      return root ? root.getBoundingClientRect().top : null;
+                    }"""
+                )
+                if probe is None:
+                    return False
+                top_now = float(probe)
+                # 根内坐标 = 视口 y - top_now；避开固定头/底栏
+                y0 = max(0.0, self._NEWS_HEADER_CHROME - top_now)
+                y1 = min(
+                    viewport_h - self._NEWS_FOOTER_CHROME - top_now, root_h
+                )
+                if y1 - y0 < 40:
+                    break
+                y0i, y1i = int(y0), int(y1)
+                if y0i > prev_end:
+                    # 平滑滚动过冲会留缝隙：向上滚回对齐
+                    await page.mouse.wheel(0, -(y0i - prev_end))
+                    await page.wait_for_timeout(400)
+                    continue
+                # 等根内图片解码，避免灰占位块进拼图
+                await page.evaluate(
+                    """() => Promise.race([
+                      Promise.all(
+                        Array.from(
+                          document.querySelectorAll(
+                            '[data-hd2-capture-root="true"] img'
+                          )
+                        ).map((img) =>
+                          img.complete
+                            ? Promise.resolve()
+                            : img.decode().catch(() => {})
+                        )
+                      ),
+                      new Promise((r) => setTimeout(r, 2000)),
+                    ])"""
+                )
+                part = await page.screenshot(
+                    type="png",
+                    animations="disabled",
+                    clip={
+                        "x": art_x,
+                        "y": y0i + top_now,
+                        "width": art_w,
+                        "height": y1i - y0i,
+                    },
+                )
+                with Image.open(io.BytesIO(part)) as piece:
+                    canvas.paste(piece.convert("RGB"), (0, y0i))
+                prev_end = y1i
+                if y1i >= root_h - 2 or prev_end >= canvas.height:
+                    break
+                await page.mouse.wheel(0, y1i - y0i)
+                await page.wait_for_timeout(500)
+            if prev_end <= 0:
+                return False
+            canvas.save(temporary, format="PNG", optimize=True)
+            return True
+        except Exception as exc:  # noqa: BLE001 - 拼接失败回退旧路径
+            logger.warning(
+                "[HD2] Companion news 分段拼接截图失败，回退元素整体截图: %s",
+                exc,
+            )
+            return False
 
     def _cache_is_fresh(self, path: Path) -> bool:
         try:
