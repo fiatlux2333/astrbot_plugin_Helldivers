@@ -548,7 +548,7 @@ class CompanionScreenshotClient:
                 if y0i > prev_end:
                     # 平滑滚动过冲会留缝隙：向上滚回对齐
                     await page.mouse.wheel(0, -(y0i - prev_end))
-                    await page.wait_for_timeout(500)
+                    await page.wait_for_timeout(400)
                     continue
                 # 等根内图片解码，避免灰占位块进拼图
                 await page.evaluate(
@@ -564,7 +564,7 @@ class CompanionScreenshotClient:
                             : img.decode().catch(() => {})
                         )
                       ),
-                      new Promise((r) => setTimeout(r, 2500)),
+                      new Promise((r) => setTimeout(r, 2000)),
                     ])"""
                 )
                 part = await page.screenshot(
@@ -583,7 +583,7 @@ class CompanionScreenshotClient:
                 if y1i >= root_h - 2 or prev_end >= canvas.height:
                     break
                 await page.mouse.wheel(0, y1i - y0i)
-                await page.wait_for_timeout(700)
+                await page.wait_for_timeout(500)
             if prev_end <= 0:
                 return False
             canvas.save(temporary, format="PNG", optimize=True)
@@ -1104,7 +1104,14 @@ class CompanionPlaywrightClient:
                         "x": x,
                         "y": y,
                         "width": clip_width,
-                        "height": clip_height,
+                        # news 分段拼接会展示 644px 以下的正文，文本提取
+                        # （viewportBottom 过滤）必须跟上可见范围，否则
+                        # 拼接图下半部分永远保持英文。
+                        "height": (
+                            self._NEWS_STITCH_MAX_HEIGHT
+                            if target.kind == "news_latest"
+                            else clip_height
+                        ),
                     },
                 },
             )
