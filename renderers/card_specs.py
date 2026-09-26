@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .card_renderer import COLOR_DSS, COLOR_MO, FACTION_COLORS, Card
-from .text_utils import (
+from ..core.text_utils import (
     clean_game_text,
     dispatch_type_name,
     format_expires_in,
@@ -14,7 +14,7 @@ from .text_utils import (
     format_percentage,
     format_time_hours,
 )
-from .war_state import (
+from ..core.war_state import (
     campaign_planet,
     campaign_progress_pct,
     faction_cn,
@@ -694,7 +694,7 @@ def build_planet_candidates_card(query: str, planets: list[dict[str, Any]]) -> C
 
 def build_arsenal_card(item: dict[str, Any], *, aliases: list[str] | None = None) -> Card:
     """HD2Tool 武器库物品卡片：武器/战备/护甲/手榴弹通用。"""
-    from .arsenal_client import (
+    from ..clients.arsenal_client import (
         ACQUISITION_ZH,
         COMPONENT_LABEL_ZH,
         FIELD_ZH,
@@ -819,7 +819,7 @@ def build_arsenal_card(item: dict[str, Any], *, aliases: list[str] | None = None
 def build_arsenal_candidates_card(
     query: str, items: list[dict[str, Any]]
 ) -> Card:
-    from .arsenal_client import PRODUCT_KIND_ZH
+    from ..clients.arsenal_client import PRODUCT_KIND_ZH
 
     card = Card(
         title=f"装备搜索 · {query}",
@@ -845,7 +845,7 @@ def build_enemy_card(
     item: dict[str, Any], armor_parts: list[tuple[str, int]] | None = None
 ) -> Card:
     """敌人卡片：阵营、护甲类型、血量（含部位）、部位护甲、伤害信息、wiki 链接。"""
-    from .arsenal_client import (
+    from ..clients.arsenal_client import (
         _ENEMY_CLASS_ZH,
         _PART_NAME_ZH,
         armor_tier_label,

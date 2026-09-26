@@ -5,7 +5,7 @@ import time
 import unittest
 from contextlib import contextmanager
 
-from astrbot_plugin_Helldivers.text_utils import format_iso_time
+from astrbot_plugin_Helldivers.core.text_utils import format_iso_time
 
 
 @contextmanager

@@ -33,7 +33,7 @@ from .visual_assets import prune_render_outputs
 from typing import Any
 
 try:
-    from .i18n import format_planet
+    from ..core.i18n import format_planet
     from .hud_theme import (
         cockpit_backdrop,
         draw_chamfered_panel,

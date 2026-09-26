@@ -15,7 +15,7 @@ except Exception:  # pragma: no cover
     ImageDraw = None  # type: ignore
 
 try:
-    from .i18n import format_planet
+    from ..core.i18n import format_planet
     from .visual_assets import (
         asset_image,
         ellipsize,

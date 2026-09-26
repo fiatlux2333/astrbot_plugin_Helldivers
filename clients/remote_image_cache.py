@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Final
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
-from .plugin_info import USER_AGENT
+from ..core.plugin_info import USER_AGENT
 
 try:
     import aiohttp
@@ -132,6 +132,7 @@ class RemoteImageCache:
         self._session = session
         self._own_session = False
         self._locks: dict[str, asyncio.Lock] = {}
+        self._lock_refs: dict[str, int] = {}
 
     @property
     def available(self) -> bool:
@@ -228,9 +229,24 @@ class RemoteImageCache:
         try:
             canonical = self.validate_url(url)
             key = self._cache_key(canonical)
-            lock = self._locks.setdefault(key, asyncio.Lock())
-            async with lock:
-                return await self._get_record_locked(canonical, key, force=force)
+            # 引用计数在等待锁之前累加：持锁者退出时仅当无等待者才回收，
+            # 防止后到者拿到新锁对象与旧持锁者并发进入临界区。
+            lock = self._locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._locks[key] = lock
+                self._lock_refs[key] = 0
+            self._lock_refs[key] = self._lock_refs.get(key, 0) + 1
+            try:
+                # single-flight：同 key 并发请求只放一个进临界区，其余等结果
+                async with lock:
+                    return await self._get_record_locked(canonical, key, force=force)
+            finally:
+                self._lock_refs[key] -= 1
+                if self._lock_refs[key] <= 0:
+                    self._lock_refs.pop(key, None)
+                    if self._locks.get(key) is lock and not lock.locked():
+                        self._locks.pop(key, None)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

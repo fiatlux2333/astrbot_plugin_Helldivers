@@ -38,7 +38,7 @@ except ImportError:  # pragma: no cover - exposed through ``available``
 
 try:
     from . import visual_assets as _visual_assets
-    from .i18n import format_faction, format_planet
+    from ..core.i18n import format_faction, format_planet
 except Exception:  # pragma: no cover - direct module execution
     try:
         import visual_assets as _visual_assets  # type: ignore[no-redef]
@@ -245,7 +245,7 @@ def _asset_root() -> Path | None:
         root = getattr(_visual_assets, "ASSET_ROOT", None)
         if root:
             return Path(root)
-    candidate = Path(__file__).resolve().parent / "assets"
+    candidate = Path(__file__).resolve().parent.parent / "assets"
     return candidate if candidate.is_dir() else None
 
 

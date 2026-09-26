@@ -23,16 +23,16 @@ if "astrbot.api" not in sys.modules:
     sys.modules["astrbot"] = astrbot
     sys.modules["astrbot.api"] = api
 
-from astrbot_plugin_Helldivers.api_client import HD2Client
-from astrbot_plugin_Helldivers.cache import CacheService
-from astrbot_plugin_Helldivers.campaign_trends import CampaignTrendStore
-from astrbot_plugin_Helldivers.formatters import format_dss_message
+from astrbot_plugin_Helldivers.clients.api_client import HD2Client
+from astrbot_plugin_Helldivers.core.cache import CacheService
+from astrbot_plugin_Helldivers.core.campaign_trends import CampaignTrendStore
+from astrbot_plugin_Helldivers.core.formatters import format_dss_message
+from astrbot_plugin_Helldivers.clients.remote_image_cache import ALLOWED_IMAGE_MIMES
 from astrbot_plugin_Helldivers.services import HelldiversService
-from astrbot_plugin_Helldivers.remote_image_cache import ALLOWED_IMAGE_MIMES
-from astrbot_plugin_Helldivers.stats_model import build_stats_view_model
-from astrbot_plugin_Helldivers.steam_parser import parse_steam_content
-from astrbot_plugin_Helldivers.translator import TranslationCache, TranslationService
-from astrbot_plugin_Helldivers.war_state import WarState, campaign_faction
+from astrbot_plugin_Helldivers.core.stats_model import build_stats_view_model
+from astrbot_plugin_Helldivers.core.steam_parser import parse_steam_content
+from astrbot_plugin_Helldivers.clients.translator import TranslationCache, TranslationService
+from astrbot_plugin_Helldivers.core.war_state import WarState, campaign_faction
 
 
 class ModelTests(unittest.TestCase):
@@ -56,8 +56,9 @@ class ModelTests(unittest.TestCase):
             )
         )
         limit = schema["bilibili_image_max_pixels"]["default"]
-        self.assertEqual(limit, 32_000_000)
-        self.assertGreater(limit, 2_606 * 8_186)
+        self.assertEqual(limit, 64_000_000)
+        # 2026-09-26 快报长图 2606×19510 ≈ 5083 万像素必须放行
+        self.assertGreater(limit, 2_606 * 19_510)
 
     def test_remote_image_cache_does_not_advertise_avif(self) -> None:
         self.assertNotIn("image/avif", ALLOWED_IMAGE_MIMES)
@@ -163,9 +164,8 @@ class ApiClientTests(unittest.IsolatedAsyncioTestCase):
             "https://localhost/data.json",
             "https://user:pass@example.com/data.json",
         ):
-            with self.subTest(url=url):
-                with self.assertRaises(ValueError):
-                    HD2Client._external_url_target(url, allow_private=False)
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                HD2Client._external_url_target(url, allow_private=False)
         self.assertEqual(
             HD2Client._external_url_target(
                 "https://example.com/data.json", allow_private=False
@@ -286,7 +286,6 @@ class ApiClientTests(unittest.IsolatedAsyncioTestCase):
             async def request_json(self, method, path, **kwargs):
                 self.max_attempts = kwargs.get("max_attempts")
                 self.failure_is_warning = kwargs.get("failure_is_warning")
-                return None
 
         client = RecordingClient()
         self.assertIsNone(await client.fetch_steam_updates_official())
@@ -365,8 +364,10 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             async def store(self, *args, **kwargs):
                 self.stored.append((args, kwargs))
 
-        async def immediate_timeout(awaitable, timeout):
-            raise asyncio.TimeoutError
+        async def immediate_timeout(tasks, timeout=None):
+            # 审计 H2 后走 asyncio.wait（不再调 wait_for）：
+            # 直接返回 done=∅ / running=全部，模拟预算立即到期。
+            return set(), set(tasks)
 
         service = object.__new__(HelldiversService)
         service.translator = SlowTranslator()
@@ -377,7 +378,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         target = types.SimpleNamespace(kind="news_latest")
 
         with patch(
-            "astrbot_plugin_Helldivers.services.asyncio.wait_for",
+            "astrbot_plugin_Helldivers.services.asyncio.wait",
             new=immediate_timeout,
         ):
             outcome = await service.translate_companion_fragments(
@@ -395,6 +396,69 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(cancelled.is_set())
         self.assertEqual(len(service.translation_cache.stored), 1)
+        self.assertEqual(service._companion_translation_tasks, set())
+
+    async def test_companion_partial_timeout_recycles_finished_batches(self) -> None:
+        """≥2 批次且部分在预算内完成：已完成批次必须被回收（审计 H2 泄漏回归）。
+
+        泄漏形态：预算内完成的批次既无回调也无 discard，滞留在
+        _companion_translation_tasks；预热循环 5 分钟一次，无界增长。
+        """
+
+        release = asyncio.Event()
+
+        class MixedTranslator:
+            async def translate_texts(self, texts):
+                if any("slow" in text for text in texts):
+                    await release.wait()
+                    return ["慢批次译文" for _ in texts]
+                return [f"快译文 {index}" for index, _ in enumerate(texts)]
+
+        class EmptyCache:
+            provider_fingerprint = "test"
+
+            def __init__(self):
+                self.stored = []
+
+            async def get(self, namespace, item_id):
+                return None
+
+            async def store(self, *args, **kwargs):
+                self.stored.append((args, kwargs))
+
+        async def fake_wait(tasks, timeout=None):
+            # 让快批次有机会完成，再按真实完成状态切分 done/running
+            await asyncio.sleep(0.05)
+            done = {t for t in tasks if t.done()}
+            running = {t for t in tasks if not t.done()}
+            return done, running
+
+        service = object.__new__(HelldiversService)
+        service.translator = MixedTranslator()
+        service.translation_cache = EmptyCache()
+        service.companion_translation_batch_timeout = 4.5
+        service.companion_translation_budget = 30.0
+        service._companion_translation_tasks = set()
+        target = types.SimpleNamespace(kind="news_latest")
+
+        # batch_size=16 → 16 段快文本 + 1 段慢文本 = 2 个批次
+        fragments = [f"Fragment {i} needs translation right now." for i in range(16)]
+        fragments.append("A very slow briefing that blocks until release.")
+        self.assertGreater(len(fragments), 16)
+
+        with patch(
+            "astrbot_plugin_Helldivers.services.asyncio.wait",
+            new=fake_wait,
+        ):
+            await service.translate_companion_fragments(target, fragments)
+
+        # 只有超时在途的慢批次留在集合里；预算内完成的快批次必须已被回收
+        self.assertEqual(len(service._companion_translation_tasks), 1)
+
+        release.set()
+        await asyncio.gather(*service._companion_translation_tasks)
+        await asyncio.sleep(0)
+
         self.assertEqual(service._companion_translation_tasks, set())
 
     async def test_failed_companion_translation_is_not_cacheable(self) -> None:

@@ -1,6 +1,6 @@
 # 绝地潜兵2情报助手 (astrbot_plugin_Helldivers)
 
-基于 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 的《绝地潜兵2》银河战争情报插件，当前版本 `v1.8.11`。
+基于 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 的《绝地潜兵2》银河战争情报插件，当前版本 `v1.9.0`。
 
 数据来源：Helldivers 2 Community API、Helldivers Companion、Steam News API、helldivers.wiki.gg。常规情报由 Pillow 渲染为中文卡片；`/hd2news`、`/dss`、`/planet`、`/companion` 通过 Playwright 截取 Companion 网页并做术语级中文翻译。内置双层缓存、请求限流重试、官方译名词表（569 条）预替换与 AI 翻译（内置接口或 OpenAI 兼容接口）；翻译提示词实质性改版时通过协议指纹（当前 v4）自动失效旧翻译缓存。
 
@@ -23,6 +23,7 @@
 /wiki <关键词> [-f]                Wiki 查询；-f 返回全文；中文自动按官方译名搜索
 /hd2data <名称>                    军需簿：武器/护甲/敌人（支持俗称如电喷/泰坦）
 /hd2refresh 或 /刷新缓存            强制刷新 Companion 截图缓存
+/hd2ping 或 /诊断 /自检             自诊断：数据源健康、缓存年龄、关键配置
 /银河快报 / /galaxy_news            获取最近一期银河快报
 /银河快报订阅 / /银河快报退订        当前群推送开关
 /hd2                               简短帮助

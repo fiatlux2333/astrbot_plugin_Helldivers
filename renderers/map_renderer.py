@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 try:
-    from .i18n import format_faction, format_planet, format_status, t
+    from ..core.i18n import format_faction, format_planet, format_status, t
     from .hud_theme import cockpit_backdrop, draw_chamfered_panel, draw_scanlines
     from .visual_assets import asset_image, asset_sha256, paste_contain
 except Exception:  # pragma: no cover

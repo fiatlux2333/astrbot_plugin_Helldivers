@@ -50,11 +50,11 @@ except ImportError:  # pragma: no cover - fallback for stripped test envs
     sys.modules["astrbot"] = astrbot
     sys.modules["astrbot.api"] = api
 
-from astrbot_plugin_Helldivers.api_client import HD2Client
-from astrbot_plugin_Helldivers.cache import CacheService
-from astrbot_plugin_Helldivers.glossary import preapply_glossary
+from astrbot_plugin_Helldivers.clients.api_client import HD2Client
+from astrbot_plugin_Helldivers.core.cache import CacheService
+from astrbot_plugin_Helldivers.core.glossary import preapply_glossary
 from astrbot_plugin_Helldivers.services import HelldiversService
-from astrbot_plugin_Helldivers.translator import TranslationCache, TranslationService
+from astrbot_plugin_Helldivers.clients.translator import TranslationCache, TranslationService
 
 
 class TranslationTests(unittest.IsolatedAsyncioTestCase):
@@ -280,7 +280,7 @@ class TranslationTests(unittest.IsolatedAsyncioTestCase):
 
         service._ensure_session = get_session
         with patch(
-            "astrbot_plugin_Helldivers.translator.asyncio.sleep",
+            "astrbot_plugin_Helldivers.clients.translator.asyncio.sleep",
             new=AsyncMock(),
         ):
             content = await service._request_openai_content({"model": "test"})

@@ -9,9 +9,7 @@ from io import BytesIO
 from pathlib import Path
 
 from aiohttp import ClientConnectorDNSError, web
-from PIL import Image
-
-from astrbot_plugin_Helldivers.companion_screenshot import (
+from astrbot_plugin_Helldivers.clients.companion_screenshot import (
     CompanionPlaywrightClient,
     CompanionScreenshotClient,
     CompanionScreenshotError,
@@ -25,6 +23,7 @@ from astrbot_plugin_Helldivers.companion_screenshot import (
     parse_companion_news_target,
     parse_companion_planet_target,
 )
+from PIL import Image
 
 
 class CompanionTargetTests(unittest.TestCase):
@@ -241,7 +240,7 @@ class ScreenshotPipelineStructureTests(unittest.TestCase):
     def test_page_screenshot_not_nested_under_translation_branch(self) -> None:
         import ast
 
-        source_path = Path(__file__).resolve().parent.parent / "companion_screenshot.py"
+        source_path = Path(__file__).resolve().parent.parent / "clients" / "companion_screenshot.py"
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
 
         fns = [

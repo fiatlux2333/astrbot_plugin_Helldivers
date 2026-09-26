@@ -15,7 +15,8 @@ from urllib.parse import quote, urlencode
 import aiohttp
 from astrbot.api import logger
 
-from .plugin_info import USER_AGENT
+from ..core.diagnostics import HEALTH
+from ..core.plugin_info import USER_AGENT
 
 
 def _strip_html_snippet(text: str) -> str:
@@ -173,6 +174,8 @@ class WikiClient:
             "User-Agent": self.user_agent,
             "Accept": "application/json",
         }
+        action = str(params.get("action") or "query")
+        started = time.perf_counter()
         last_error: Exception | None = None
         for attempt in range(1, self.retry_max_attempts + 1):
             try:
@@ -185,7 +188,13 @@ class WikiClient:
                     timeout=self.timeout,
                 ) as resp:
                     if resp.status == 200:
-                        return await resp.json(content_type=None)
+                        data = await resp.json(content_type=None)
+                        HEALTH.record_ok(
+                            "wiki",
+                            detail=f"api.php {action}",
+                            latency_ms=(time.perf_counter() - started) * 1000.0,
+                        )
+                        return data
                     if (
                         resp.status in {429, 500, 502, 503, 504}
                         and attempt < self.retry_max_attempts
@@ -199,6 +208,9 @@ class WikiClient:
                     logger.error(
                         f"[HD2] wiki API failed status={resp.status} params={params}"
                     )
+                    HEALTH.record_fail(
+                        "wiki", detail=f"HTTP {resp.status} {action}"
+                    )
                     return None
             except asyncio.CancelledError:
                 raise
@@ -210,6 +222,7 @@ class WikiClient:
                     await asyncio.sleep(delay)
                     continue
                 logger.error(f"[HD2] wiki API final error: {e}")
+                HEALTH.record_fail("wiki", detail=f"{action}: {e}")
                 return None
         if last_error:
             logger.error(f"[HD2] wiki API exhausted retries: {last_error}")

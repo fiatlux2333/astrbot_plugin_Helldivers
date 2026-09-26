@@ -30,7 +30,7 @@ except ImportError:  # pragma: no cover
     ImageOps = None  # type: ignore[assignment]
 
 try:
-    from .steam_parser import ParsedSteamContent, SteamBlock, parse_steam_content
+    from ..core.steam_parser import ParsedSteamContent, SteamBlock, parse_steam_content
 except ImportError:  # pragma: no cover - supports direct module loading in smoke tests
     from steam_parser import ParsedSteamContent, SteamBlock, parse_steam_content
 

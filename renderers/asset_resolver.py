@@ -17,7 +17,7 @@ from typing import Any, Iterable, Mapping
 from PIL import Image, UnidentifiedImageError
 
 
-ASSET_ROOT = Path(__file__).resolve().parent / "assets"
+ASSET_ROOT = Path(__file__).resolve().parent.parent / "assets"
 MANIFEST_PATH = ASSET_ROOT / "manifest.json"
 _LOGICAL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")

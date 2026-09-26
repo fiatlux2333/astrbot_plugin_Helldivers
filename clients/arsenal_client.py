@@ -18,6 +18,8 @@ from typing import Any, Final
 
 import aiohttp
 
+from ..core.diagnostics import HEALTH
+
 try:
     from astrbot.api import logger
 except ImportError:  # pragma: no cover - 单测环境
@@ -75,7 +77,7 @@ _MANUAL_ENEMIES: Final[tuple[tuple[str, str, str], ...]] = (
 def enemy_name_zh(name_en: str) -> str:
     """用官方敌人词表把英文名转中文，未收录时原样返回。"""
     try:
-        from .glossary import ENEMY_NAMES
+        from ..core.glossary import ENEMY_NAMES
 
         zh = ENEMY_NAMES.get(name_en.strip().casefold())
         if zh:
@@ -383,6 +385,14 @@ class ArsenalClient:
     def data_version(self) -> str:
         return self._data_version
 
+    @property
+    def item_count(self) -> int:
+        return len(self._items)
+
+    @property
+    def enemy_count(self) -> int:
+        return len(self._enemies)
+
     async def ensure_loaded(self, *, force: bool = False) -> bool:
         """加载缓存数据；超过刷新间隔或强制时重新下载。"""
         async with self._lock:
@@ -419,15 +429,18 @@ class ArsenalClient:
                 ):
                     body = await self._fetch_any(session, urls)
                     if body is None:
+                        HEALTH.record_fail("hd2tool", detail="镜像全部失败")
                         return False
                     tmp = path.with_suffix(".tmp")
                     tmp.write_bytes(body)
                     tmp.replace(path)
+            HEALTH.record_ok("hd2tool", detail="catalog+aliases 下载成功")
             return True
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             logger.warning(f"[HD2] arsenal download failed: {exc}")
+            HEALTH.record_fail("hd2tool", detail=str(exc))
             return False
 
     @staticmethod
@@ -547,16 +560,21 @@ class ArsenalClient:
                                 tmp.write_bytes(body)
                                 tmp.replace(enemies_path)
                                 self._enemies_failed_at = 0.0
+                                HEALTH.record_ok("wiki", detail="enemies cargoquery")
                             else:
                                 self._enemies_failed_at = time.time()
                                 logger.warning(
                                     f"[HD2] enemies download HTTP {resp.status}"
+                                )
+                                HEALTH.record_fail(
+                                    "wiki", detail=f"enemies HTTP {resp.status}"
                                 )
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
                     self._enemies_failed_at = time.time()
                     logger.warning(f"[HD2] enemies download failed: {exc}")
+                    HEALTH.record_fail("wiki", detail=f"enemies: {exc}")
         try:
             raw = json.loads(enemies_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):

@@ -31,8 +31,8 @@ except Exception:  # pragma: no cover - clean behavior when Pillow is absent
     ImageFont = None  # type: ignore[assignment]
 
 try:
-    from .i18n import format_planet
-    from .stats_model import build_stats_view_model
+    from ..core.i18n import format_planet
+    from ..core.stats_model import build_stats_view_model
 except ImportError:  # Support direct module loading during integration/smoke tests.
     from i18n import format_planet
     from stats_model import build_stats_view_model

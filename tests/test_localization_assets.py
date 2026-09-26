@@ -4,18 +4,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from PIL import Image
-
-from astrbot_plugin_Helldivers.campaign_trends import estimate_campaign_result
-from astrbot_plugin_Helldivers.i18n import (
+from astrbot_plugin_Helldivers.core.campaign_trends import estimate_campaign_result
+from astrbot_plugin_Helldivers.core.i18n import (
     format_dss_action,
     format_faction,
     format_planet,
     format_status,
 )
-from astrbot_plugin_Helldivers.map_renderer import MapRenderer
-from astrbot_plugin_Helldivers.visual_assets import asset_image, asset_sha256
-from astrbot_plugin_Helldivers.war_state import faction_cn
+from astrbot_plugin_Helldivers.renderers.map_renderer import MapRenderer
+from astrbot_plugin_Helldivers.renderers.visual_assets import asset_image, asset_sha256
+from astrbot_plugin_Helldivers.core.war_state import faction_cn
 
 
 class LocalizationAssetTests(unittest.TestCase):

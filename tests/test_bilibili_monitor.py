@@ -5,15 +5,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from astrbot_plugin_Helldivers.bilibili_monitor import (
+from astrbot_plugin_Helldivers.clients.bilibili_monitor import (
+    GALAXY_NEWS_UID,
+    LEGACY_GALAXY_NEWS_UID,
     BilibiliMonitor,
     BilibiliPost,
     BilibiliRiskControlError,
-    GALAXY_NEWS_UID,
-    LEGACY_GALAXY_NEWS_UID,
     normalize_galaxy_news_uid,
-    parse_opus_feed_item,
     parse_dynamic,
+    parse_opus_feed_item,
     sign_wbi_params,
 )
 

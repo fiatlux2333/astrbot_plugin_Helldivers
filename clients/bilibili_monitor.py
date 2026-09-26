@@ -15,6 +15,8 @@ from urllib.parse import quote, urlencode, urlparse
 
 import aiohttp
 
+from ..core.diagnostics import HEALTH
+
 GALAXY_NEWS_UID = "3546777720457465"
 LEGACY_GALAXY_NEWS_UID = "3493282298464839"
 
@@ -355,16 +357,24 @@ class BilibiliMonitor:
         while not self._stopping:
             sleep_seconds = self.interval
             try:
-                await self.check_once()
+                sent = await self.check_once()
+                HEALTH.record_ok(
+                    "bilibili",
+                    detail=f"轮询正常，推送 {sent} 条" if sent else "轮询正常",
+                )
                 self._risk_warning_logged = False
             except asyncio.CancelledError:
                 raise
             except BilibiliRiskControlError as exc:
+                HEALTH.record_fail("bilibili", detail=str(exc))
                 if not self._risk_warning_logged:
                     self.log_warning(f"[HD2] {exc}")
                     self._risk_warning_logged = True
                 sleep_seconds = max(self.interval, 3600)
             except Exception as exc:
+                HEALTH.record_fail(
+                    "bilibili", detail=f"{type(exc).__name__}: {exc}"
+                )
                 self.log_warning(
                     f"[HD2] Bilibili monitor error: {type(exc).__name__}: {exc}"
                 )

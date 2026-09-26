@@ -14,7 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Final
 
-_GLOSSARY_DIR: Final[Path] = Path(__file__).resolve().parent / "assets" / "glossary"
+_GLOSSARY_DIR: Final[Path] = Path(__file__).resolve().parent.parent / "assets" / "glossary"
 
 
 def _load_json(name: str) -> dict[str, str]:

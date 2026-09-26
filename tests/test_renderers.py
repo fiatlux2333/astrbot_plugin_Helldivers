@@ -6,23 +6,22 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from PIL import Image
-
-from astrbot_plugin_Helldivers.awaiting_orders_renderer import AwaitingOrdersRenderer
-from astrbot_plugin_Helldivers.dashboard_renderer import DashboardRenderer
-from astrbot_plugin_Helldivers.dss_renderer import DSSRenderer
-from astrbot_plugin_Helldivers.dispatch_renderer import DispatchRenderer
-from astrbot_plugin_Helldivers.global_event_renderer import GlobalEventRenderer
-from astrbot_plugin_Helldivers.map_renderer import MapRenderer
-from astrbot_plugin_Helldivers.major_order_renderer import MajorOrderRenderer
-from astrbot_plugin_Helldivers.stats_model import build_stats_view_model
-from astrbot_plugin_Helldivers.stats_renderer import StatsRenderer
-from astrbot_plugin_Helldivers.steam_parser import parse_steam_content
-from astrbot_plugin_Helldivers.steam_renderer import (
+from astrbot_plugin_Helldivers.renderers.awaiting_orders_renderer import AwaitingOrdersRenderer
+from astrbot_plugin_Helldivers.renderers.dashboard_renderer import DashboardRenderer
+from astrbot_plugin_Helldivers.renderers.dispatch_renderer import DispatchRenderer
+from astrbot_plugin_Helldivers.renderers.dss_renderer import DSSRenderer
+from astrbot_plugin_Helldivers.renderers.global_event_renderer import GlobalEventRenderer
+from astrbot_plugin_Helldivers.renderers.major_order_renderer import MajorOrderRenderer
+from astrbot_plugin_Helldivers.renderers.map_renderer import MapRenderer
+from astrbot_plugin_Helldivers.core.stats_model import build_stats_view_model
+from astrbot_plugin_Helldivers.renderers.stats_renderer import StatsRenderer
+from astrbot_plugin_Helldivers.core.steam_parser import parse_steam_content
+from astrbot_plugin_Helldivers.renderers.steam_renderer import (
     SteamRenderer,
     _visual_asset_image,
 )
-from astrbot_plugin_Helldivers.warfront_renderer import WarfrontRenderer
+from astrbot_plugin_Helldivers.renderers.warfront_renderer import WarfrontRenderer
+from PIL import Image
 
 
 class RendererTests(unittest.TestCase):

@@ -13,10 +13,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import inspect
+import time
 from collections.abc import AsyncGenerator, Callable
 from functools import wraps
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
@@ -24,21 +25,22 @@ from astrbot.api.message_components import Image, Plain
 from astrbot.api.star import Context, Star
 from astrbot.core.config.astrbot_config import AstrBotConfig
 
-from .api_client import HD2Client
-from .bilibili_monitor import (
+from .clients.api_client import HD2Client
+from .clients.arsenal_client import ArsenalClient
+from .renderers.awaiting_orders_renderer import AwaitingOrdersRenderer
+from .clients.bilibili_monitor import (
+    GALAXY_NEWS_UID,
+    LEGACY_GALAXY_NEWS_UID,
     BilibiliAuthenticationError,
     BilibiliMonitor,
     BilibiliPost,
     BilibiliRiskControlError,
-    GALAXY_NEWS_UID,
-    LEGACY_GALAXY_NEWS_UID,
 )
-from .visual_assets import configure_asset_manifest
-from .awaiting_orders_renderer import AwaitingOrdersRenderer
-from .cache import CacheService, get_plugin_data_dir
-from .campaign_trends import CampaignTrendStore
-from .card_renderer import CardRenderer
-from .companion_screenshot import (
+from .core.cache import CacheService, get_plugin_data_dir
+from .core.campaign_trends import CampaignTrendStore
+from .renderers.card_renderer import CardRenderer
+from .clients.companion_news_monitor import CompanionNewsMonitor
+from .clients.companion_screenshot import (
     CompanionConfigurationError,
     CompanionPlaywrightClient,
     CompanionScreenshotClient,
@@ -49,33 +51,39 @@ from .companion_screenshot import (
     companion_latest_news_target,
     parse_companion_planet_target,
 )
-from .companion_news_monitor import CompanionNewsMonitor
-from .dashboard_renderer import DashboardRenderer
-from .dss_renderer import DSSRenderer
-from .dispatch_renderer import DispatchRenderer
-from .global_event_renderer import GlobalEventRenderer
-from .map_renderer import MapRenderer
-from .major_order_renderer import MajorOrderRenderer
-from .plugin_info import (
+from .renderers.dashboard_renderer import DashboardRenderer
+from .core.diagnostics import (
+    EXPECTED_SOURCES,
+    HEALTH,
+    build_ping_report,
+    humanize_age,
+    humanize_uptime,
+)
+from .renderers.dispatch_renderer import DispatchRenderer
+from .renderers.dss_renderer import DSSRenderer
+from .renderers.global_event_renderer import GlobalEventRenderer
+from .renderers.major_order_renderer import MajorOrderRenderer
+from .renderers.map_renderer import MapRenderer
+from .core.plugin_info import (
     PLUGIN_NAME,
     PLUGIN_VERSION,
     USER_AGENT,
 )
-from .remote_image_cache import RemoteImageCache
+from .clients.remote_image_cache import RemoteImageCache
 from .services import HelldiversService
-from .stats_renderer import StatsRenderer
-from .steam_renderer import SteamRenderer
-from .translator import TranslationCache, TranslationService
-from .warfront_renderer import WarfrontRenderer
-from .arsenal_client import ArsenalClient
-from .wiki_client import WikiCache, WikiClient
+from .renderers.stats_renderer import StatsRenderer
+from .renderers.steam_renderer import SteamRenderer
+from .clients.translator import TranslationCache, TranslationService
+from .renderers.visual_assets import configure_asset_manifest
+from .renderers.warfront_renderer import WarfrontRenderer
+from .clients.wiki_client import WikiCache, WikiClient
 
 PLUGIN_DESC = (
     "Helldivers 2 银河战争图片情报：Dashboard、统计、DSS、星图、事件、Steam 与战线排行"
 )
 
-HELP_TEXT = """\
-Helldivers 2 银河战争 {version}
+HELP_TEXT = f"""\
+Helldivers 2 银河战争 {PLUGIN_VERSION}
 ━━━━━━━━━━━━━━━━━━━━
 【战况 · 图片卡片】
 /dashboard            银河战争总览（实时数据）
@@ -95,16 +103,17 @@ Helldivers 2 银河战争 {version}
 /wiki <关键词>        Helldivers Wiki（-f 查看全文）
 /hd2data <名称>       军需簿：武器/护甲/敌人
 /银河快报             立即获取最新一期银河快报
+/hd2ping              数据源自诊断（健康/缓存）
 /hd2help              全部指令说明
 /hd2                  简短帮助
 ━━━━━━━━━━━━━━━━━━━━
 阵营: Terminids / Automaton / Illuminate
      （终结族 / 机器人 / 光能者）
 数据: api.helldivers2.dev · wiki.gg · HD2Tool
-为了超级地球！🌍""".format(version=PLUGIN_VERSION)
+为了超级地球！🌍"""
 
-HDHELP_TEXT = """\
-绝地潜兵2情报助手 {version} · 全部指令
+HDHELP_TEXT = f"""\
+绝地潜兵2情报助手 {PLUGIN_VERSION} · 全部指令
 ━━━━━━━━━━━━━━━━━━━━
 
 【核心战况 · 实时数据】
@@ -136,9 +145,10 @@ HDHELP_TEXT = """\
 【帮助】
 /hd2                  简短帮助
 /hd2help              本说明
+/hd2ping              自诊断：数据源健康、缓存年龄
 ━━━━━━━━━━━━━━━━━━━━
 阵营: 终结族 / 机器人 / 光能者
-为了超级地球！🌍""".format(version=PLUGIN_VERSION)
+为了超级地球！🌍"""
 
 
 def _strip_cmd(text: str, names: set[str]) -> list[str]:
@@ -208,7 +218,7 @@ class HelldiversPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None) -> None:
         super().__init__(context)
         self.config = config or {}
-        self.service: Optional[HelldiversService] = None
+        self.service: HelldiversService | None = None
         self.bilibili_monitor: BilibiliMonitor | None = None
         self.bilibili_auto_enabled = False
         self.companion_enabled = False
@@ -246,6 +256,7 @@ class HelldiversPlugin(Star):
 
     async def initialize(self) -> None:
         data_dir = get_plugin_data_dir(PLUGIN_NAME)
+        HEALTH.mark_boot()
 
         self.companion_enabled = bool(
             self._cfg("enable_companion_screenshots", False)
@@ -550,8 +561,8 @@ class HelldiversPlugin(Star):
             proxy_url=str(self._cfg("proxy_url", "") or ""),
             timeout=int(self._cfg("api_timeout", 30) or 30),
             max_image_bytes=int(
-                self._cfg("bilibili_image_max_bytes", 12 * 1024 * 1024)
-                or 12 * 1024 * 1024
+                self._cfg("bilibili_image_max_bytes", 16 * 1024 * 1024)
+                or 16 * 1024 * 1024
             ),
             send_post=self._send_bilibili_post,
             log_info=logger.info,
@@ -568,12 +579,12 @@ class HelldiversPlugin(Star):
                     }
                 ),
                 max_bytes=int(
-                    self._cfg("bilibili_image_max_bytes", 12 * 1024 * 1024)
-                    or 12 * 1024 * 1024
+                    self._cfg("bilibili_image_max_bytes", 16 * 1024 * 1024)
+                    or 16 * 1024 * 1024
                 ),
                 max_pixels=int(
-                    self._cfg("bilibili_image_max_pixels", 32000000)
-                    or 32000000
+                    self._cfg("bilibili_image_max_pixels", 64000000)
+                    or 64000000
                 ),
                 max_cache_bytes=int(self._cfg("image_cache_max_mb", 150) or 150)
                 * 1024
@@ -777,7 +788,7 @@ class HelldiversPlugin(Star):
             )
             return 0
         try:
-            image_bytes = path.read_bytes()
+            image_bytes = await asyncio.to_thread(path.read_bytes)
         except OSError as exc:
             logger.warning(
                 "[HD2] Companion news push image unreadable: %s error=%s",
@@ -790,13 +801,23 @@ class HelldiversPlugin(Star):
             try:
                 chain = MessageChain().message("📰 Companion 新闻更新")
                 chain.chain.append(Image.fromBytes(image_bytes))
-                await self.context.send_message(unified_msg_origin, chain)
-                delivered += 1
+                sent = await self.context.send_message(unified_msg_origin, chain)
             except Exception as e:
                 logger.warning(
                     "[HD2] Companion news push failed: session=%s error=%s",
                     unified_msg_origin,
                     e,
+                )
+                continue
+            # send_message 返回 bool（是否找到匹配平台）；平台失配只记日志
+            # 返回 False 不抛异常，必须显式计数，否则会把未送达当已送达。
+            if sent:
+                delivered += 1
+            else:
+                logger.warning(
+                    "[HD2] Companion news push not delivered "
+                    "(no matching platform): session=%s",
+                    unified_msg_origin,
                 )
         if delivered:
             logger.info(
@@ -842,7 +863,8 @@ class HelldiversPlugin(Star):
         post: BilibiliPost,
         image_paths: list[Path],
         sessions: list[str],
-    ) -> None:
+    ) -> int:
+        """推送一条 B 站动态到全部订阅群，返回实际送达数（无匹配平台不计）。"""
         if not sessions:
             logger.info(
                 "[HD2] matched Bilibili dynamic %s, but no QQ group subscribed",
@@ -855,7 +877,7 @@ class HelldiversPlugin(Star):
         image_bytes: list[bytes] = []
         for path in image_paths:
             try:
-                image_bytes.append(path.read_bytes())
+                image_bytes.append(await asyncio.to_thread(path.read_bytes))
             except OSError as exc:
                 logger.warning(
                     "[HD2] Bilibili image unreadable: path=%s error=%s",
@@ -869,11 +891,10 @@ class HelldiversPlugin(Star):
                 for data in image_bytes:
                     chain.chain.append(Image.fromBytes(data))
                 chain.message(f"\n原动态：{post.url}")
-                await self.context.send_message(
+                sent = await self.context.send_message(
                     unified_msg_origin,
                     chain,
                 )
-                delivered += 1
             except Exception as e:
                 logger.warning(
                     "[HD2] Bilibili push failed: session=%s dynamic=%s error=%s",
@@ -881,10 +902,23 @@ class HelldiversPlugin(Star):
                     post.dynamic_id,
                     e,
                 )
+                continue
+            # 同 _push_companion_news：False = 无匹配平台，不能计为已送达，
+            # 否则 delivered==0 的重试触发点永远不可达。
+            if sent:
+                delivered += 1
+            else:
+                logger.warning(
+                    "[HD2] Bilibili push not delivered "
+                    "(no matching platform): session=%s dynamic=%s",
+                    unified_msg_origin,
+                    post.dynamic_id,
+                )
         if delivered == 0:
             raise RuntimeError(
                 f"Bilibili dynamic {post.dynamic_id} failed for all subscribed groups"
             )
+        return delivered
 
     def _svc(self) -> HelldiversService:
         if self.service is None:
@@ -929,7 +963,8 @@ class HelldiversPlugin(Star):
             components: list[Any] = [Plain(f"【{post.author}】\n{post.text}")]
             for path in paths:
                 try:
-                    components.append(Image.fromBytes(path.read_bytes()))
+                    data = await asyncio.to_thread(path.read_bytes)
+                    components.append(Image.fromBytes(data))
                 except OSError as exc:
                     logger.warning(
                         f"[HD2] galaxy news image unreadable: {path} error={exc}"
@@ -1032,16 +1067,14 @@ class HelldiversPlugin(Star):
         client = self.companion_playwright
         if client is None:
             return False
-        return kind in client._served_stale
+        return kind in client.served_stale_kinds()
 
     def _stale_fallback_path(self, target: CompanionTarget) -> Path | None:
         """Return a stale cached screenshot path if one exists, else None."""
         client = self.companion_playwright
         if client is None:
             return None
-        output = client.output_dir / (
-            f"playwright_v9_{client._cache_namespace}_{client._cache_key(target)}"
-        )
+        output = client.cached_output_path(target)
         if output.is_file():
             return output
         return None
@@ -1211,6 +1244,93 @@ class HelldiversPlugin(Star):
                 logger.warning(f"[HD2] /hd2refresh {target.kind} failed: {e}")
                 results.append(f"❌ {target.label}（{e}）")
         yield event.plain_result("Companion 缓存刷新完成：\n" + "\n".join(results))
+
+    @filter.command("hd2ping", alias={"诊断", "自检"})
+    @_command_handler
+    async def cmd_hd2ping(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
+        """自诊断：各数据源健康、缓存年龄与关键配置一览。"""
+        svc = self._svc()
+        now = time.time()
+        client = svc.client
+
+        monitor = getattr(self, "bilibili_monitor", None)
+        if monitor is not None:
+            bilibili_part = (
+                f"UID {monitor.uid}"
+                + ("（带登录态）" if monitor.has_login_cookie else "（游客）")
+            )
+        else:
+            bilibili_part = "未启用"
+        companion_part = (
+            str(self.companion_backend) if self.companion_enabled else "关"
+        )
+        info_lines = [
+            f"⏱ 运行 {humanize_uptime(HEALTH.uptime_seconds)} · 战争 ID "
+            f"{client.war_id} · 主API {client.base_url} · 代理: "
+            f"{'已配置' if client.proxy_url else '未配置'}",
+            (
+                f"翻译: {'开(' + str(svc.translator.mode) + ')' if svc.enable_translation else '关'}"
+                f" · Companion: {companion_part}"
+                f" · 军需簿: {'开' if svc.arsenal_client is not None else '关'}"
+                f" · B站: {bilibili_part}"
+            ),
+        ]
+
+        ages: list[str] = []
+        for name in (
+            svc.CACHE_WAR_STATUS,
+            svc.CACHE_ORDERS,
+            svc.CACHE_DISPATCHES,
+            svc.CACHE_STEAM,
+            svc.CACHE_PLANETS,
+            svc.CACHE_CAMPAIGNS,
+            svc.CACHE_SPACE_STATIONS,
+        ):
+            entry = await svc.cache.get_entry(name)
+            age = humanize_age(now - entry.updated_at) if entry else "无缓存"
+            ages.append(f"{name} {age}")
+        cache_lines = [" · ".join(ages[:4]), " · ".join(ages[4:])]
+
+        arsenal = svc.arsenal_client
+        if arsenal is not None:
+            catalog_path = arsenal.cache_dir / "catalog.json"
+            enemies_path = arsenal.cache_dir / "enemies.json"
+
+            def _arsenal_cache_mtimes() -> tuple[float, float]:
+                return (
+                    catalog_path.stat().st_mtime if catalog_path.is_file() else 0.0,
+                    enemies_path.stat().st_mtime if enemies_path.is_file() else 0.0,
+                )
+
+            catalog_mtime, enemies_mtime = await asyncio.to_thread(
+                _arsenal_cache_mtimes
+            )
+            parts = ["军需簿:"]
+            if catalog_mtime > 0:
+                detail = f"目录 {humanize_age(now - catalog_mtime)}"
+                if arsenal.data_version:
+                    detail += f" (v{arsenal.data_version})"
+                detail += f" {arsenal.item_count} 条"
+                parts.append(detail)
+            else:
+                parts.append("目录未下载")
+            if enemies_mtime > 0:
+                parts.append(
+                    f"敌人表 {humanize_age(now - enemies_mtime)}"
+                    f" {arsenal.enemy_count} 种"
+                )
+            cache_lines.append(" · ".join(parts))
+
+        yield event.plain_result(
+            build_ping_report(
+                HEALTH.snapshot(),
+                title=f"🩺 HD2 自诊断 {PLUGIN_VERSION}",
+                info_lines=info_lines,
+                cache_lines=cache_lines,
+                expected_sources=EXPECTED_SOURCES,
+                now=now,
+            )
+        )
 
     @filter.command("steam")
     @_command_handler

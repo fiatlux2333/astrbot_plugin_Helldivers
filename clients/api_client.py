@@ -7,6 +7,7 @@ import ipaddress
 import random
 import re
 import socket
+import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 from urllib.parse import urljoin, urlsplit
@@ -14,7 +15,8 @@ from urllib.parse import urljoin, urlsplit
 import aiohttp
 from astrbot.api import logger
 
-from .plugin_info import USER_AGENT
+from ..core.diagnostics import HEALTH, key_for_host
+from ..core.plugin_info import USER_AGENT
 
 
 class HD2Client:
@@ -145,6 +147,7 @@ class HD2Client:
     ) -> Any:
         url = self._url(path)
         headers = self._headers_for_url(url)
+        started = time.perf_counter()
         if extra_headers:
             headers.update(extra_headers)
         attempts = (
@@ -173,7 +176,13 @@ class HD2Client:
                     request_kwargs["timeout"] = request_timeout
                 async with session.request(method, url, **request_kwargs) as resp:
                     if resp.status == 200:
-                        return await resp.json(content_type=None)
+                        data = await resp.json(content_type=None)
+                        HEALTH.record_ok(
+                            key_for_host(url),
+                            detail=f"{method} {urlsplit(url).path}",
+                            latency_ms=(time.perf_counter() - started) * 1000.0,
+                        )
+                        return data
 
                     body_preview = ""
                     try:
@@ -208,6 +217,9 @@ class HD2Client:
                     log_failure(
                         f"HD2 API {method} {url} failed status={resp.status} body={body_preview}"
                     )
+                    HEALTH.record_fail(
+                        key_for_host(url), detail=f"HTTP {resp.status}"
+                    )
                     return None
             except asyncio.CancelledError:
                 raise
@@ -226,6 +238,7 @@ class HD2Client:
                     logger.warning(
                         f"HD2 API {method} {url} non-retryable error: {error_text}"
                     )
+                    HEALTH.record_fail(key_for_host(url), detail=error_text)
                     return None
                 if attempt < attempts:
                     delay = min(
@@ -239,6 +252,7 @@ class HD2Client:
                     await asyncio.sleep(delay)
                     continue
                 log_failure(f"HD2 API {method} {url} final error: {error_text}")
+                HEALTH.record_fail(key_for_host(url), detail=error_text)
                 return None
 
         if last_error:
@@ -334,6 +348,7 @@ class HD2Client:
     ) -> Any:
         current = str(url or "").strip()
         redirect_limit = max(0, int(max_redirects))
+        started = time.perf_counter()
         clean_headers = {
             "Accept": "application/json",
             "User-Agent": self.headers["User-Agent"],
@@ -373,8 +388,23 @@ class HD2Client:
                             response.status,
                             current,
                         )
+                        HEALTH.record_fail(
+                            key_for_host(current), detail=f"HTTP {response.status}"
+                        )
                         return None
-                    return await response.json(content_type=None)
+                    try:
+                        data = await response.json(content_type=None)
+                    except Exception as exc:
+                        HEALTH.record_fail(
+                            key_for_host(current), detail=f"bad json: {exc}"
+                        )
+                        return None
+                    HEALTH.record_ok(
+                        key_for_host(current),
+                        detail=urlsplit(current).path or "/",
+                        latency_ms=(time.perf_counter() - started) * 1000.0,
+                    )
+                    return data
         return None
 
     async def get_json(self, path: str) -> Any:

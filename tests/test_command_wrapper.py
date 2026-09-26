@@ -4,12 +4,11 @@ import unittest
 
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.star import Star
-
 from astrbot_plugin_Helldivers.main import _command_handler
 
 
 class _FakePlugin(Star):
-    def __init__(self) -> None:  # noqa: D107 - 测试桩，无需初始化 Star
+    def __init__(self) -> None:
         pass
 
 

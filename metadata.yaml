@@ -16,7 +16,8 @@ desc: |
   - 军需簿装备/敌人数据库查询
   - Companion 新闻订阅推送
   - B 站银河快报监听推送
-version: 1.8.11
+  - 数据源自诊断（/hd2ping）
+version: 1.9.0
 author: 牡蛎
 repo: https://github.com/fiatlux2333/astrbot_plugin_Helldivers
 astrbot_version: ">=4.16,<5"

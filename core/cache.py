@@ -27,7 +27,7 @@ def get_plugin_data_dir(plugin_name: str = "astrbot_plugin_Helldivers") -> Path:
 
             base = Path(get_astrbot_data_path()) / "plugin_data"
         except Exception:
-            base = Path(__file__).resolve().parent / "data"
+            base = Path(__file__).resolve().parent.parent / "data"
 
     path = base / plugin_name
     path.mkdir(parents=True, exist_ok=True)

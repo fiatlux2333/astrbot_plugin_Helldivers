@@ -25,7 +25,7 @@
   "api_user_agent": {
     "description": "User-Agent",
     "type": "string",
-    "default": "astrbot_plugin_Helldivers/1.8.11"
+    "default": "astrbot_plugin_Helldivers/1.9.0"
   },
   "api_timeout": {
     "description": "API 请求超时（秒）",
@@ -177,14 +177,14 @@
   "bilibili_image_max_bytes": {
     "description": "B站单张图片最大字节数",
     "type": "int",
-    "hint": "默认 12 MiB",
-    "default": 12582912
+    "hint": "默认 16 MiB；超限时缓存层会自动降质重编码",
+    "default": 16777216
   },
   "bilibili_image_max_pixels": {
     "description": "B站单张长图最大解码像素",
     "type": "int",
-    "hint": "银河快报常用超长图；默认 3200 万像素，仍保留解压炸弹防护",
-    "default": 32000000
+    "hint": "银河快报常用超长图；默认 6400 万像素（5083 万像素的 0926 长图即靠此放行），仍保留解压炸弹防护",
+    "default": 64000000
   },
   "enable_background_refresh": {
     "description": "启用后台定时同步",

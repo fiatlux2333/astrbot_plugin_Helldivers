@@ -16,7 +16,8 @@ from urllib.parse import urlsplit
 import aiohttp
 from astrbot.api import logger
 
-from .plugin_info import USER_AGENT
+from ..core.diagnostics import HEALTH
+from ..core.plugin_info import USER_AGENT
 
 
 class TranslationService:
@@ -347,6 +348,7 @@ class TranslationService:
 
     async def _translate_builtin(self, text: str, to_lang: str | None) -> str:
         payload, headers, params = self._builtin_request(text, to_lang)
+        started = time.perf_counter()
         try:
             session = await self._ensure_session()
             async with session.post(
@@ -361,12 +363,19 @@ class TranslationService:
                     logger.warning(
                         f"[HD2] translation API status={resp.status} for text={text[:40]!r}"
                     )
+                    HEALTH.record_fail("translate", detail=f"builtin HTTP {resp.status}")
                     return text
                 data = await resp.json(content_type=None)
                 if not isinstance(data, dict):
+                    HEALTH.record_fail("translate", detail="builtin 响应非 JSON 对象")
                     return text
                 translated = self._extract_builtin_translation(data)
                 if translated and translated != text.strip():
+                    HEALTH.record_ok(
+                        "translate",
+                        detail=f"builtin {len(text)}字符",
+                        latency_ms=(time.perf_counter() - started) * 1000.0,
+                    )
                     return translated
                 nested = data.get("data")
                 logger.warning(
@@ -376,11 +385,13 @@ class TranslationService:
                     if isinstance(nested, dict)
                     else [],
                 )
+                HEALTH.record_fail("translate", detail="builtin 响应缺译文")
                 return text
         except asyncio.CancelledError:
             raise
         except Exception as e:
             logger.warning(f"[HD2] translation failed: {e}")
+            HEALTH.record_fail("translate", detail=f"builtin: {e}")
             return text
 
     async def _translate_openai(self, text: str, to_lang: str | None) -> str:
@@ -601,15 +612,26 @@ class TranslationService:
                         ) as resp:
                             if resp.status == 200:
                                 if payload.get("stream"):
-                                    return await self._read_openai_stream_content(resp)
+                                    content = await self._read_openai_stream_content(resp)
+                                    if content:
+                                        HEALTH.record_ok("translate", detail="openai stream")
+                                    else:
+                                        HEALTH.record_fail("translate", detail="openai 流为空")
+                                    return content
                                 data = await resp.json(content_type=None)
                                 choices = (data or {}).get("choices") or []
                                 if not choices:
+                                    HEALTH.record_fail("translate", detail="openai 无 choices")
                                     return ""
-                                return str(
+                                content = str(
                                     (choices[0].get("message") or {}).get("content")
                                     or ""
                                 ).strip()
+                                if content:
+                                    HEALTH.record_ok("translate", detail="openai 200")
+                                else:
+                                    HEALTH.record_fail("translate", detail="openai 空回复")
+                                return content
                             body = ""
                             try:
                                 body = (await resp.text())[:160]
@@ -628,6 +650,9 @@ class TranslationService:
                                     resp.status,
                                     body,
                                 )
+                                HEALTH.record_fail(
+                                    "translate", detail=f"openai HTTP {resp.status}"
+                                )
                                 return ""
                             if resp.status in {500, 502, 503, 504} and attempt == 0:
                                 logger.warning(
@@ -641,9 +666,13 @@ class TranslationService:
                                 resp.status,
                                 body,
                             )
+                            HEALTH.record_fail(
+                                "translate", detail=f"openai HTTP {resp.status}"
+                            )
                             if resp.status in {500, 502, 503, 504}:
                                 self._enter_openai_cooldown(resp, body)
                             return ""
+                HEALTH.record_fail("translate", detail="openai endpoint 404")
                 return ""
         except asyncio.CancelledError:
             raise
@@ -654,6 +683,7 @@ class TranslationService:
                 time.monotonic() + self.transient_failure_window
             )
             logger.warning(f"[HD2] openai 翻译失败: {e}")
+            HEALTH.record_fail("translate", detail=f"openai: {e}")
             return ""
 
     @staticmethod

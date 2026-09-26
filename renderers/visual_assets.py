@@ -26,7 +26,7 @@ Color: TypeAlias = RGB | RGBA | str
 Font: TypeAlias = ImageFont.FreeTypeFont | ImageFont.ImageFont
 FitMode: TypeAlias = Literal["contain", "cover"]
 
-ASSET_ROOT = Path(__file__).resolve().parent / "assets"
+ASSET_ROOT = Path(__file__).resolve().parent.parent / "assets"
 _MANIFEST_PATH: Path | None = None
 _FONT_TOKEN_RE = re.compile(r"\s+|[A-Za-z0-9][A-Za-z0-9_./:%+\-]*|.", re.DOTALL)
 

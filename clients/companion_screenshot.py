@@ -19,6 +19,8 @@ from PIL import Image, UnidentifiedImageError
 
 from astrbot.api import logger
 
+from ..core.diagnostics import HEALTH
+
 COMPANION_ORIGIN = "https://helldiverscompanion.com/"
 COMPANION_HOST = "helldiverscompanion.com"
 
@@ -718,22 +720,49 @@ class CompanionPlaywrightClient:
             await playwright.stop()
 
 
-    async def capture(self, target: CompanionTarget, *, force: bool = False) -> Path:
-        output = self.output_dir / (
+    def served_stale_kinds(self) -> set[str]:
+        """Kinds whose last capture served a stale cache (push gating)."""
+
+        return set(self._served_stale)
+
+    def cached_output_path(self, target: CompanionTarget) -> Path:
+        """On-disk path of the cached screenshot for *target*.
+
+        单一来源：main.py 的 stale 兜底等外部逻辑必须经此方法取缓存
+        路径，禁止自行拼接文件名（客户端改名时外部会静默失配）。
+        """
+
+        return self.output_dir / (
             f"playwright_v9_{self._cache_namespace}_{self._cache_key(target)}"
         )
+
+    async def capture(self, target: CompanionTarget, *, force: bool = False) -> Path:
+        output = self.cached_output_path(target)
         # Reset stale-tracking at the start of each capture call; it is set
         # to True inside _capture_uncached when a stale cache is served.
         self._served_stale.discard(target.kind)
         if not force and self._cache_is_fresh(output):
+            HEALTH.record_ok("screenshot", detail=f"{target.label} 缓存命中")
             return output
         try:
             async with asyncio.timeout(self.timeout):
-                return await self._capture_within_timeout(target, output, force=force)
+                captured = await self._capture_within_timeout(
+                    target, output, force=force
+                )
         except TimeoutError as exc:
+            HEALTH.record_fail(
+                "screenshot", detail=f"{target.label} 超时>{int(self.timeout)}s"
+            )
             raise CompanionScreenshotError(
                 f"Companion 截图总耗时超过 {self.timeout} 秒"
             ) from exc
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            HEALTH.record_fail("screenshot", detail=f"{target.label}: {exc}")
+            raise
+        HEALTH.record_ok("screenshot", detail=str(target.label))
+        return captured
 
     async def _capture_within_timeout(
         self,
@@ -1160,7 +1189,12 @@ class CompanionPlaywrightClient:
             ) from exc
         finally:
             if context is not None:
-                await context.close()
+                # 清理路径绝不抛错：context.close() 失败时保留原始
+                # 超时/业务异常，不再让清理异常取而代之。
+                try:
+                    await context.close()
+                except Exception as exc:  # noqa: BLE001 - cleanup path
+                    logger.debug("[HD2] browser context close failed: %s", exc)
             try:
                 temporary.unlink(missing_ok=True)
             except OSError:

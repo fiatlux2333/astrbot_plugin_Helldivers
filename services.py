@@ -6,22 +6,35 @@ import asyncio
 import copy
 import hashlib
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from astrbot.api import logger
 
-from .api_client import HD2Client
-from .awaiting_orders_renderer import AwaitingOrdersRenderer
-from .cache import CacheService
-from .campaign_trends import CampaignTrendStore
-from .companion_screenshot import CompanionTranslationResult
-from .dashboard_renderer import DashboardRenderer
-from .dss_renderer import DSSRenderer
-from .dispatch_renderer import DispatchRenderer
-from .global_event_renderer import GlobalEventRenderer
-from .i18n import known_planet_names, lookup_planet_name
-from .formatters import (
+from .clients.api_client import HD2Client
+from .clients.arsenal_client import ArsenalClient
+from .renderers.awaiting_orders_renderer import AwaitingOrdersRenderer
+from .core.cache import CacheService
+from .core.campaign_trends import CampaignTrendStore
+from .renderers.card_renderer import CardRenderer
+from .renderers.card_specs import (
+    build_dashboard_card,
+    build_dss_card,
+    build_global_events_card,
+    build_news_card,
+    build_order_card,
+    build_personal_order_card,
+    build_planet_candidates_card,
+    build_planet_card,
+    build_stats_card,
+    build_warfront_card,
+)
+from .clients.companion_screenshot import CompanionTranslationResult
+from .renderers.dashboard_renderer import DashboardRenderer
+from .renderers.dispatch_renderer import DispatchRenderer
+from .renderers.dss_renderer import DSSRenderer
+from .core.formatters import (
     WIKI_USAGE,
     format_dss_message,
     format_global_events_message,
@@ -37,34 +50,21 @@ from .formatters import (
     format_wiki_search_results,
     format_wiki_summary,
 )
-from .card_renderer import CardRenderer
-from .card_specs import (
-    build_dashboard_card,
-    build_dss_card,
-    build_global_events_card,
-    build_news_card,
-    build_order_card,
-    build_personal_order_card,
-    build_planet_candidates_card,
-    build_planet_card,
-    build_stats_card,
-    build_warfront_card,
-)
-from .map_renderer import MapRenderer
-from .major_order_renderer import MajorOrderRenderer
-from .remote_image_cache import RemoteImageCache
-from .stats_model import build_stats_view_model
-from .stats_renderer import StatsRenderer
-from .steam_parser import ParsedSteamContent, SteamBlock, parse_steam_content
-from .text_utils import clean_game_text
-from .glossary import contains_cjk, preapply_glossary, translate_query
-from .steam_renderer import SteamRenderer
-from .translator import TranslationCache, TranslationService
-from .war_state import WarState, normalize_faction, planet_index, planet_name
-from .warfront_renderer import WarfrontRenderer
-from .arsenal_client import ArsenalClient
-from .wiki_client import WikiClient
-
+from .renderers.global_event_renderer import GlobalEventRenderer
+from .core.glossary import contains_cjk, preapply_glossary, translate_query
+from .core.i18n import known_planet_names, lookup_planet_name
+from .renderers.major_order_renderer import MajorOrderRenderer
+from .renderers.map_renderer import MapRenderer
+from .clients.remote_image_cache import RemoteImageCache
+from .core.stats_model import build_stats_view_model
+from .renderers.stats_renderer import StatsRenderer
+from .core.steam_parser import ParsedSteamContent, SteamBlock, parse_steam_content
+from .renderers.steam_renderer import SteamRenderer
+from .core.text_utils import clean_game_text
+from .clients.translator import TranslationCache, TranslationService
+from .core.war_state import WarState, normalize_faction, planet_index, planet_name
+from .renderers.warfront_renderer import WarfrontRenderer
+from .clients.wiki_client import WikiClient
 
 _COMPANION_STATIC_TRANSLATIONS = {
     "review message from super earth": "查阅来自超级地球的消息",
@@ -172,7 +172,7 @@ class HelldiversService:
         drop_untranslated_content: bool = True,
         companion_translation_batch_timeout: float = 9.0,
         companion_translation_budget: float = 18.0,
-        arsenal_client: "ArsenalClient | None" = None,
+        arsenal_client: ArsenalClient | None = None,
     ) -> None:
         self.client = client
         self.cache = cache
@@ -313,6 +313,9 @@ class HelldiversService:
         if self._rotation_tasks:
             await asyncio.gather(*self._rotation_tasks, return_exceptions=True)
         self._rotation_tasks = []
+        # 关停语义：集合里是在途后台翻译批次（预算到期后最长可跑数十秒），
+        # 终止时必须 cancel 丢弃而不是 gather 等其自然完成，否则插件卸载
+        # 会被在途 LLM 请求拖住。cancel 已完成的任务是无害空操作。
         companion_tasks = list(self._companion_translation_tasks)
         for task in companion_tasks:
             if not task.done():
@@ -490,7 +493,7 @@ class HelldiversService:
                 p = await asyncio.to_thread(self.awaiting_orders_renderer.render)
                 return [p] if p else []
             # 专用 renderer 不可用时才回退通用卡。
-            from .card_renderer import Card, FACTION_COLORS
+            from .renderers.card_renderer import FACTION_COLORS, Card
 
             card = Card(
                 title="AW · 等待最高命令",
@@ -687,7 +690,7 @@ class HelldiversService:
     def _restore_dispatch_planets(text: str, replacements: dict[str, str]) -> str:
         result = str(text)
         for placeholder, name in replacements.items():
-            result = re.sub(re.escape(placeholder), lambda _: name, result, flags=re.I)
+            result = re.sub(re.escape(placeholder), lambda _: name, result, flags=re.IGNORECASE)
         return result
 
     async def get_news_message(self, index: int = 1) -> str:
@@ -938,9 +941,7 @@ class HelldiversService:
             cached = await self.translation_cache.get("steam_card", cache_id)
             if cached and cached.get("original_text") == text:
                 cached_text = str(cached.get("translated_text") or text)
-                if cached_text != text:
-                    resolved[key] = cached_text
-                elif (
+                if cached_text != text or (
                     not self.drop_untranslated_content
                     or not _has_translatable_english(text)
                 ):
@@ -1143,7 +1144,7 @@ class HelldiversService:
             await self.arsenal_client.ensure_enemies()
         except Exception as e:
             logger.warning(f"[HD2] enemies load error: {e}")
-        from .card_specs import (
+        from .renderers.card_specs import (
             build_arsenal_candidates_card,
             build_arsenal_card,
             build_enemy_card,
@@ -1513,92 +1514,93 @@ class HelldiversService:
                 for i, chunk in enumerate(chunks)
             ]
 
-            async def _gather_batches() -> None:
-                """Collect per-chunk failures as each batch resolves."""
-                results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-                for result in results:
-                    if isinstance(result, BaseException):
-                        # Unexpected error inside translate_pending: treat the
-                        # whole chunk as unresolved so the screenshot keeps the
-                        # original English for those fragments.
-                        logger.warning(
-                            "[HD2] Companion %s 翻译批次异常: %s",
-                            kind,
-                            result,
-                        )
-                        continue
-                    unresolved.extend(result)
-
-            gather_task = asyncio.create_task(
-                _gather_batches(), name=f"hd2-companion-gather-{kind}"
+            background_tasks: set[asyncio.Task] = getattr(
+                self, "_companion_translation_tasks", None
             )
-            try:
-                await asyncio.wait_for(
-                    asyncio.shield(gather_task),
-                    timeout=translation_budget,
+            if background_tasks is None:
+                background_tasks = set()
+                self._companion_translation_tasks = background_tasks
+            # 任务创建后立即登记并挂轻量回收回调：正常完成/预算到期/
+            # 外部取消三条退出路径都会自动从集合移除，不存在游离任务。
+            background_tasks.update(batch_tasks)
+
+            def _discard_when_done(completed: asyncio.Task) -> None:
+                background_tasks.discard(completed)
+
+            for bt in batch_tasks:
+                bt.add_done_callback(_discard_when_done)
+
+            def finish_background_batch(
+                completed: asyncio.Task,
+                *,
+                task_set: set[asyncio.Task] = background_tasks,
+                page_kind: str = kind,
+            ) -> None:
+                task_set.discard(completed)
+                if completed.cancelled():
+                    return
+                try:
+                    failed = completed.result()
+                except Exception as exc:  # noqa: BLE001 - task boundary
+                    logger.warning(
+                        "[HD2] Companion %s 后台翻译批次失败: %s",
+                        page_kind,
+                        exc,
+                    )
+                    return
+                logger.info(
+                    "[HD2] Companion %s 后台翻译批次完成 unresolved=%s",
+                    page_kind,
+                    len(failed),
                 )
-            except asyncio.TimeoutError:
-                # Budget exhausted: move still-running batch tasks to the
-                # background set so they survive and populate the cache, then
-                # treat any not-yet-collected fragments as unresolved.
+
+            # asyncio.wait 只等待、不接管任务：超时后子任务照常运行。
+            # 不能用 gather + cancel——GatheringFuture.cancel() 会级联
+            # 取消全部子任务，在途 LLM 请求会被中断、缓存预热落空。
+            done, running = await asyncio.wait(
+                batch_tasks, timeout=translation_budget
+            )
+            if running:
+                # 预算到期：在途批次转后台写入缓存，未收集片段视为未译。
+                # 带日志的回调只挂在在途批次上；预算内已完成批次的回收
+                # 已由 _discard_when_done 处理，不会滞留在集合里。
                 logger.warning(
                     "[HD2] Companion %s 翻译预算 %.1fs 到期，已完成的批次生效，"
                     "剩余批次转入后台继续写入缓存",
                     kind,
                     translation_budget,
                 )
-                gather_task.cancel()
-                # Cancel only the gather wrapper; the underlying batch_tasks
-                # were created with asyncio.shield semantics in spirit (they
-                # are independent tasks) so they keep running.  Collect them
-                # into the background set and register a completion callback.
-                background_tasks = getattr(
-                    self, "_companion_translation_tasks", None
-                )
-                if background_tasks is None:
-                    background_tasks = set()
-                    self._companion_translation_tasks = background_tasks
-
-                def finish_background_batch(
-                    completed: asyncio.Task,
-                    *,
-                    task_set: set[asyncio.Task] = background_tasks,
-                    page_kind: str = kind,
-                ) -> None:
-                    task_set.discard(completed)
-                    if completed.cancelled():
-                        return
-                    try:
-                        failed = completed.result()
-                    except Exception as exc:  # noqa: BLE001 - task boundary
-                        logger.warning(
-                            "[HD2] Companion %s 后台翻译批次失败: %s",
-                            page_kind,
-                            exc,
-                        )
-                        return
-                    logger.info(
-                        "[HD2] Companion %s 后台翻译批次完成 unresolved=%s",
-                        page_kind,
-                        len(failed),
-                    )
-
-                for bt in batch_tasks:
-                    if not bt.done():
-                        background_tasks.add(bt)
-                        bt.add_done_callback(finish_background_batch)
-
+                for bt in running:
+                    bt.add_done_callback(finish_background_batch)
                 # Rebuild the unresolved list from scratch to avoid
-                # double-counting: _gather_batches may have already added
-                # failed items from completed batches.  Take the union of
-                # (a) items already in unresolved and (b) items not yet
-                # translated, deduplicated by source text.
+                # double-counting: completed batches may have already added
+                # failed items.  Take the union of (a) items already in
+                # unresolved and (b) items not yet translated, deduplicated
+                # by source text.
                 resolved_sources = set(translations.keys())
                 unresolved_set: set[str] = {src for src, _ in unresolved}
                 for src, cid in pending:
                     if src not in resolved_sources and src not in unresolved_set:
                         unresolved.append((src, cid))
                         unresolved_set.add(src)
+            else:
+                # 全部批次在预算内完成：收集各批次结果。
+                for bt in done:
+                    if bt.cancelled():
+                        continue
+                    try:
+                        result = bt.result()
+                    except Exception as exc:  # noqa: BLE001 - task boundary
+                        # Unexpected error inside translate_pending: treat the
+                        # whole chunk as unresolved so the screenshot keeps the
+                        # original English for those fragments.
+                        logger.warning(
+                            "[HD2] Companion %s 翻译批次异常: %s",
+                            kind,
+                            exc,
+                        )
+                        continue
+                    unresolved.extend(result)
 
         untranslated_count = len(cached_failures) + len(unresolved) + skipped_count
         # Distinguish "translation API is rate-limiting us" (transient) from
@@ -1675,7 +1677,7 @@ class HelldiversService:
         if not include_actions or not isinstance(actions, list):
             return view
         try:
-            from .i18n import format_dss_action
+            from .core.i18n import format_dss_action
         except ImportError:  # pragma: no cover - direct module execution
             from i18n import format_dss_action  # type: ignore
 
@@ -2199,6 +2201,6 @@ class HelldiversService:
 
 
 def planet_index_safe(planet: dict[str, Any]) -> int | None:
-    from .war_state import planet_index
+    from .core.war_state import planet_index
 
     return planet_index(planet)
