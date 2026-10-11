@@ -343,11 +343,11 @@ FIELD_ZH: Final[dict[str, str]] = {
     "durableDamage": "耐久伤害",
     "armorPenetration": "穿甲",
     "dps": "秒伤",
+    "innerRadius": "内半径",
+    "outerRadius": "外半径",
     "demolitionForce": "拆除力",
     "stagger": "硬直",
     "push": "击退",
-    "innerRadius": "内半径",
-    "outerRadius": "外半径",
     "statusEffects": "状态效果",
 }
 
@@ -600,6 +600,11 @@ class ArsenalClient:
                     if pen_value is not None
                     else pen_direct,
                 }
+            area = attack.get("area") if isinstance(attack.get("area"), dict) else {}
+            if area.get("innerRadiusM") is not None:
+                fields["innerRadius"] = area["innerRadiusM"]
+            if area.get("outerRadiusM") is not None:
+                fields["outerRadius"] = area["outerRadiusM"]
             for src, dst in (
                 ("demolition", "demolitionForce"),
                 ("stagger", "stagger"),
@@ -822,6 +827,19 @@ class ArsenalClient:
                 f"[HD2] dionatha 补充目录加载: {len(items)} 条 (v{data_version})"
             )
             return True
+
+    async def stop(self) -> None:
+        """取消后台补充目录同步任务（插件卸载时调用）。"""
+        task = self._dionatha_task
+        self._dionatha_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:  # noqa: BLE001 - 清理路径
+                logger.warning(f"[HD2] dionatha sync stop error: {exc}")
 
     def _maybe_start_dionatha(self) -> None:
         task = self._dionatha_task

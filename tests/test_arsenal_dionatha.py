@@ -129,6 +129,29 @@ class DionathaConvertTests(unittest.TestCase):
         self.assertEqual(item["armor"]["rating"], 100)
         self.assertEqual(item["armor"]["passive"], "侦察兵")
 
+    def test_explosion_area_radii_are_mapped(self) -> None:
+        raw = {
+            "id": "ac-8-autocannon-sentry",
+            "slug": "ac-8-autocannon-sentry",
+            "name": "A/AC-8 Autocannon Sentry",
+            "kind": "sentry",
+            "attacks": [
+                {
+                    "kind": "projectile",
+                    "damage": {"standard": 70, "type": "Ballistic"},
+                    "penetration": {"direct": "medium"},
+                    "area": {"innerRadiusM": 2, "outerRadiusM": 6, "shockwaveRadiusM": 8},
+                    "forces": {},
+                }
+            ],
+        }
+        item = _convert("stratagems", raw)
+        fields = item["combat"]["components"][0]["fields"]
+        self.assertEqual(fields["innerRadius"], 2)
+        self.assertEqual(fields["outerRadius"], 6)
+        # shockwaveRadiusM 无对应 HD2Tool 字段，不进卡片
+        self.assertNotIn("shockwaveRadiusM", fields)
+
     def test_invalid_rows_return_none(self) -> None:
         self.assertIsNone(_convert("weapons", {"name": "", "slug": "x"}))
         self.assertIsNone(_convert("weapons", {"name": "X", "slug": ""}))

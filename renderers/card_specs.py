@@ -740,11 +740,15 @@ def build_arsenal_card(item: dict[str, Any], *, aliases: list[str] | None = None
     # 战备部署信息
     deploy = item.get("deployment")
     if isinstance(deploy, dict) and deploy.get("cooldownSeconds"):
-        card.field(
-            "战备",
-            f"冷却 {deploy['cooldownSeconds']}s"
-            + (f" · 输入码 {deploy['code']}" if deploy.get("code") else ""),
-        )
+        # 输入码方向 → 箭头符号（"↓↑→↑←↑"），避免打出 Python 原始列表
+        code = deploy.get("code")
+        code_text = ""
+        if isinstance(code, list) and code:
+            arrows = {"up": "↑", "down": "↓", "left": "←", "right": "→"}
+            code_text = " · 输入码 " + "".join(
+                arrows.get(str(step).lower(), "?") for step in code
+            )
+        card.field("战备", f"冷却 {deploy['cooldownSeconds']}s" + code_text)
 
     wiki = item.get("wiki") or {}
     if wiki.get("url"):
@@ -761,14 +765,18 @@ def build_arsenal_candidates_card(
         title=f"装备搜索 · {query}",
         accent=FACTION_COLORS["Humans"],
         emblem="super_earth",
-        footer="数据: HD2Tool (MIT) · 用 /hd2data <名称> 查看详情",
+        footer=(
+            "数据: HD2Tool + wiki.gg 补充目录"
+            if any(it.get("_source") == "dionatha" for it in items)
+            else "数据: HD2Tool (MIT) · 用 /hd2data <名称> 查看详情"
+        ),
     )
     if not items:
         card.text("未找到匹配装备。支持中文名、英文型号和玩家俗称（如 电喷/次抛/磁小轨）。", muted=True)
         return card
     for i, it in enumerate(items[:8], 1):
         kind = PRODUCT_KIND_ZH.get(str(it.get("productKind")), "装备")
-        name = str(it.get("nameZh") or "?")
+        name = str(it.get("nameZh") or it.get("nameEn") or "?")
         model = str(it.get("model") or "").strip()
         label = f"{name}（{model}）" if model else name
         card.text(f"[{i}] {label} · {kind}", muted=False)

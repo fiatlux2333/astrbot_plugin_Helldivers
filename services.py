@@ -315,6 +315,11 @@ class HelldiversService:
         if companion_tasks:
             await asyncio.gather(*companion_tasks, return_exceptions=True)
         self._companion_translation_tasks.clear()
+        if self.arsenal_client is not None:
+            try:
+                await self.arsenal_client.stop()
+            except Exception as e:
+                logger.warning(f"[HD2] arsenal client stop error: {e}")
         await self.cache.stop()
         if self.wiki_client is not None:
             try:
