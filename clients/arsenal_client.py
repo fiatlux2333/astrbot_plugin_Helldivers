@@ -39,6 +39,31 @@ ALIAS_URLS: Final[tuple[str, ...]] = (
     "src/data/community-aliases.json",
     "https://cdn.jsdelivr.net/gh/SalmonC/HD2Tool@main/src/data/community-aliases.json",
 )
+# wiki.gg 补充目录（dionatha 托管，每日同步，CC BY-NC-SA）：覆盖 HD2Tool 目录
+# 未收录的新债券/新装备，查询未命中主目录时由同一索引兜底
+DIONATHA_BASE_URL: Final[str] = "https://helldivers-api.dionatha.com.br"
+DIONATHA_COLLECTIONS: Final[tuple[str, ...]] = (
+    "weapons",
+    "stratagems",
+    "armors",
+    "helmets",
+    "capes",
+    "boosters",
+    "passives",
+)
+# dionatha 穿透字符串 → 游戏护甲等级（标签用 ARMOR_TIER_ZH）
+_DIONATHA_PEN_MAP: Final[dict[str, int]] = {
+    "unarmored": 0,
+    "very_light": 1,
+    "light": 2,
+    "medium": 3,
+    "heavy": 4,
+    "anti_tank_i": 5,
+    "anti_tank_ii": 6,
+    "anti_tank_iii": 7,
+    "anti_tank_iv": 8,
+}
+_MODEL_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z]+[-\s]?\d+[A-Za-z]*")
 ENEMIES_API: Final[str] = (
     "https://helldivers.wiki.gg/api.php?action=cargoquery&tables=Enemies"
     "&fields=title,health,faction,size,class,damage&limit=500&format=json"
@@ -307,18 +332,22 @@ PRODUCT_KIND_ZH: Final[dict[str, str]] = {
     "other-stratagem": "战备",
     "body-armor": "护甲",
     "grenade": "手榴弹",
+    "helmet": "头盔",
+    "cape": "披风",
+    "booster": "增强器",
+    "passive": "护甲被动",
 }
 
 FIELD_ZH: Final[dict[str, str]] = {
     "standardDamage": "伤害",
     "durableDamage": "耐久伤害",
+    "armorPenetration": "穿甲",
     "dps": "秒伤",
     "demolitionForce": "拆除力",
     "stagger": "硬直",
     "push": "击退",
     "innerRadius": "内半径",
     "outerRadius": "外半径",
-    "armorPenetration": "穿甲",
     "statusEffects": "状态效果",
 }
 
@@ -378,6 +407,11 @@ class ArsenalClient:
         self._lock = asyncio.Lock()
         self._enemies_lock = asyncio.Lock()
         self._enemies_failed_at: float = 0.0
+        self._dionatha_items: list[dict[str, Any]] = []
+        self._dionatha_loaded_at: float = 0.0
+        self._dionatha_failed_at: float = 0.0
+        self._dionatha_lock = asyncio.Lock()
+        self._dionatha_task: asyncio.Task | None = None
 
     @property
     def available(self) -> bool:
@@ -397,6 +431,7 @@ class ArsenalClient:
 
     async def ensure_loaded(self, *, force: bool = False) -> bool:
         """加载缓存数据；超过刷新间隔或强制时重新下载。"""
+        self._maybe_start_dionatha()
         async with self._lock:
             if self._items and not force:
                 if time.time() - self._loaded_at < REFRESH_INTERVAL:
@@ -483,6 +518,318 @@ class ArsenalClient:
             except Exception as exc:
                 logger.warning(f"[HD2] arsenal mirror failed ({url}): {exc}")
         return None
+
+    # ---- wiki.gg 补充目录（dionatha）----
+
+    @staticmethod
+    def _dionatha_to_item(
+        collection: str,
+        raw: dict[str, Any],
+        data_version: str,
+        passives_by_id: dict[str, str],
+    ) -> dict[str, Any] | None:
+        """wiki.gg 补充条目 → HD2Tool 伪条目，复用既有卡片渲染与索引。"""
+
+        name = str(raw.get("name") or "").strip()
+        slug = str(raw.get("slug") or raw.get("id") or "").strip()
+        if not name or not slug:
+            return None
+        model_m = _MODEL_RE.match(name)
+        wiki = raw.get("wiki") if isinstance(raw.get("wiki"), dict) else {}
+        item: dict[str, Any] = {
+            "id": f"dionatha:{slug}",
+            "model": model_m.group(0).upper().replace(" ", "-") if model_m else "",
+            "nameZh": "",
+            "nameEn": name,
+            "weaponType": "",
+            "alternateNames": [a for a in raw.get("aliases") or [] if a],
+            "wiki": {"url": wiki.get("url")},
+            "description": str(raw.get("description") or "")[:200],
+            "_source": "dionatha",
+            "_footer": f"数据: wiki.gg 补充目录 (dionatha {data_version}) · CC BY-NC-SA",
+        }
+
+        if collection == "weapons":
+            category = str(raw.get("category") or "")
+            item["productKind"] = {
+                "primary": "primary-weapon",
+                "secondary": "secondary-weapon",
+                "support": "support-weapon",
+                "throwable": "grenade",
+            }.get(category, "")
+            item["weaponType"] = str(raw.get("subcategory") or "").replace("_", " ").title()
+        elif collection == "stratagems":
+            kind = str(raw.get("kind") or "")
+            item["productKind"] = "support-weapon" if kind == "support_weapon" else "other-stratagem"
+            item["weaponType"] = kind.replace("_", " ").title()
+        elif collection == "armors":
+            item["productKind"] = "body-armor"
+        elif collection == "helmets":
+            item["productKind"] = "helmet"
+        elif collection == "capes":
+            item["productKind"] = "cape"
+        elif collection == "boosters":
+            item["productKind"] = "booster"
+        elif collection == "passives":
+            item["productKind"] = "passive"
+
+        # 战斗组件：attacks[] → combat.components（主组件取首个）
+        components: list[dict[str, Any]] = []
+        attacks = raw.get("attacks") if isinstance(raw.get("attacks"), list) else []
+        for index, attack in enumerate(attacks):
+            if not isinstance(attack, dict):
+                continue
+            damage = attack.get("damage") if isinstance(attack.get("damage"), dict) else {}
+            forces = attack.get("forces") if isinstance(attack.get("forces"), dict) else {}
+            penetration = (
+                attack.get("penetration")
+                if isinstance(attack.get("penetration"), dict)
+                else {}
+            )
+            fields: dict[str, Any] = {}
+            if damage.get("standard") is not None:
+                fields["standardDamage"] = damage["standard"]
+            if damage.get("durable") is not None:
+                fields["durableDamage"] = damage["durable"]
+            pen_direct = str(penetration.get("direct") or "")
+            if pen_direct:
+                pen_value = _DIONATHA_PEN_MAP.get(pen_direct)
+                fields["armorPenetration"] = {
+                    "value": pen_value,
+                    "labelZh": ARMOR_TIER_ZH.get(pen_value, pen_direct)
+                    if pen_value is not None
+                    else pen_direct,
+                }
+            for src, dst in (
+                ("demolition", "demolitionForce"),
+                ("stagger", "stagger"),
+                ("push", "push"),
+            ):
+                if forces.get(src) is not None:
+                    fields[dst] = forces[src]
+            if fields:
+                components.append(
+                    {
+                        "id": f"{slug}-component-{index + 1}",
+                        "type": str(attack.get("kind") or "projectile"),
+                        "label": str(damage.get("type") or attack.get("name") or ""),
+                        "fields": fields,
+                    }
+                )
+        if components:
+            item["combat"] = {
+                "components": components,
+                "primaryComponentId": components[0]["id"],
+            }
+
+        # 操控属性（枪械）
+        firearm = raw.get("firearm") if isinstance(raw.get("firearm"), dict) else {}
+        if firearm:
+            handling: dict[str, Any] = {}
+            if firearm.get("capacity") is not None:
+                handling["magazine"] = firearm["capacity"]
+            if firearm.get("spareMagazines") is not None:
+                handling["spareMagazines"] = firearm["spareMagazines"]
+            rpm = firearm.get("fireRateRpm")
+            if isinstance(rpm, list) and rpm:
+                handling["fireRate"] = rpm[0]
+            if firearm.get("recoil") is not None:
+                handling["recoil"] = firearm["recoil"]
+            modes = firearm.get("firingModes")
+            if isinstance(modes, list):
+                handling["firingModes"] = [str(mode).title() for mode in modes if mode]
+            if firearm.get("reloadTimeS") is not None:
+                handling["reloadSeconds"] = firearm["reloadTimeS"]
+            if handling:
+                item["handling"] = handling
+
+        # 战备部署（冷却/调用时间/代码）
+        if collection == "stratagems":
+            deployment: dict[str, Any] = {}
+            if isinstance(raw.get("code"), list):
+                deployment["code"] = raw["code"]
+            if raw.get("cooldownS") is not None:
+                deployment["cooldownSeconds"] = raw["cooldownS"]
+            if raw.get("callInTimeS") is not None:
+                deployment["callInSeconds"] = raw["callInTimeS"]
+            if deployment:
+                deployment["type"] = str(raw.get("kind") or "stratagem").replace("_", " ").title()
+                item["deployment"] = deployment
+
+        # 护甲数值 + 被动名解析
+        if collection == "armors":
+            armor: dict[str, Any] = {}
+            if raw.get("armorRating") is not None:
+                armor["rating"] = raw["armorRating"]
+            if raw.get("speed") is not None:
+                armor["speed"] = raw["speed"]
+            if raw.get("staminaRegen") is not None:
+                armor["staminaRegen"] = raw["staminaRegen"]
+            passive = passives_by_id.get(str(raw.get("passiveId") or ""))
+            if passive:
+                armor["passive"] = passive
+            if armor:
+                item["armor"] = armor
+        elif collection == "boosters":
+            if raw.get("effect"):
+                item["description"] = (
+                    str(raw["effect"])[:160] + " " + str(item.get("description") or "")
+                ).strip()
+
+        return item
+
+    async def _fetch_dionatha(
+        self, session: aiohttp.ClientSession, collection: str
+    ) -> bytes | None:
+        url = f"{DIONATHA_BASE_URL}/v1/{collection}.json"
+        try:
+            async with session.get(url, proxy=self.proxy_url) as resp:
+                if resp.status != 200:
+                    logger.warning(f"[HD2] dionatha {collection} HTTP {resp.status}")
+                    return None
+                return await self._read_capped(resp)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(f"[HD2] dionatha {collection} failed: {exc}")
+            return None
+
+    def _try_load_dionatha_disk(self) -> bool:
+        """重启后直接吃磁盘缓存，全部集合新鲜才返回 True。"""
+        collected: dict[str, list] = {}
+        data_version = ""
+        newest_mtime = 0.0
+        for collection in DIONATHA_COLLECTIONS:
+            path = self.cache_dir / f"dionatha_{collection}.json"
+            if not path.is_file():
+                return False
+            if time.time() - path.stat().st_mtime > REFRESH_INTERVAL:
+                return False
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return False
+            rows = payload.get("data")
+            if not isinstance(rows, list) or not rows:
+                return False
+            data_version = str((payload.get("meta") or {}).get("dataVersion") or data_version)
+            collected[collection] = [x for x in rows if isinstance(x, dict)]
+            newest_mtime = max(newest_mtime, path.stat().st_mtime)
+        passives_by_id = {
+            str(x.get("id") or ""): str(x.get("name") or "")
+            for x in collected.get("passives", [])
+        }
+        items: list[dict[str, Any]] = []
+        for collection, rows in collected.items():
+            for raw in rows:
+                converted = self._dionatha_to_item(
+                    collection, raw, data_version, passives_by_id
+                )
+                if converted:
+                    items.append(converted)
+        if not items:
+            return False
+        self._dionatha_items = items
+        self._dionatha_loaded_at = newest_mtime
+        self._build_index()
+        logger.info(f"[HD2] dionatha 补充目录磁盘加载: {len(items)} 条 (v{data_version})")
+        return True
+
+    async def ensure_dionatha(self, *, force: bool = False) -> bool:
+        """加载 wiki.gg 补充目录；失败退避，绝不影响 HD2Tool 主目录查询。"""
+        async with self._dionatha_lock:
+            if not force and self._dionatha_loaded_at:
+                if time.time() - self._dionatha_loaded_at < REFRESH_INTERVAL:
+                    return True
+            if not force and self._try_load_dionatha_disk():
+                return True
+            if (
+                not force
+                and self._dionatha_failed_at
+                and time.time() - self._dionatha_failed_at < ENEMIES_RETRY_BACKOFF
+            ):
+                return bool(self._dionatha_items)
+            started = time.perf_counter()
+            collected: dict[str, list] = {}
+            data_version = ""
+            try:
+                timeout = aiohttp.ClientTimeout(total=self.timeout_seconds * 2)
+                async with aiohttp.ClientSession(
+                    headers={
+                        "User-Agent": self.user_agent,
+                        "Accept": "application/json",
+                    },
+                    timeout=timeout,
+                    trust_env=False,
+                ) as session:
+                    for collection in DIONATHA_COLLECTIONS:
+                        body = await self._fetch_dionatha(session, collection)
+                        if body is None:
+                            continue
+                        try:
+                            payload = json.loads(body)
+                        except ValueError:
+                            continue
+                        data_version = str(
+                            (payload.get("meta") or {}).get("dataVersion") or data_version
+                        )
+                        rows = payload.get("data")
+                        if isinstance(rows, list) and rows:
+                            collected[collection] = [
+                                x for x in rows if isinstance(x, dict)
+                            ]
+                            path = self.cache_dir / f"dionatha_{collection}.json"
+                            tmp = path.with_suffix(".tmp")
+                            tmp.write_bytes(body)
+                            tmp.replace(path)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._dionatha_failed_at = time.time()
+                HEALTH.record_fail("dionatha", detail=str(exc))
+                logger.warning(f"[HD2] dionatha 补充目录加载失败: {exc}")
+                return bool(self._dionatha_items)
+            if not collected:
+                self._dionatha_failed_at = time.time()
+                HEALTH.record_fail("dionatha", detail="全部集合下载失败")
+                return bool(self._dionatha_items)
+            passives_by_id = {
+                str(x.get("id") or ""): str(x.get("name") or "")
+                for x in collected.get("passives", [])
+            }
+            items: list[dict[str, Any]] = []
+            for collection, rows in collected.items():
+                for raw in rows:
+                    converted = self._dionatha_to_item(
+                        collection, raw, data_version, passives_by_id
+                    )
+                    if converted:
+                        items.append(converted)
+            if not items:
+                self._dionatha_failed_at = time.time()
+                HEALTH.record_fail("dionatha", detail="集合为空")
+                return bool(self._dionatha_items)
+            self._dionatha_items = items
+            self._dionatha_loaded_at = time.time()
+            self._dionatha_failed_at = 0.0
+            self._build_index()
+            HEALTH.record_ok(
+                "dionatha",
+                detail=f"{len(collected)} 集合 {len(items)} 条 (v{data_version})",
+                latency_ms=(time.perf_counter() - started) * 1000.0,
+            )
+            logger.info(
+                f"[HD2] dionatha 补充目录加载: {len(items)} 条 (v{data_version})"
+            )
+            return True
+
+    def _maybe_start_dionatha(self) -> None:
+        task = self._dionatha_task
+        if task is not None and not task.done():
+            return
+        self._dionatha_task = asyncio.create_task(
+            self.ensure_dionatha(), name="hd2-dionatha-sync"
+        )
 
     def _load_from(self, catalog_path: Path, aliases_path: Path) -> bool:
         try:
@@ -730,6 +1077,14 @@ class ArsenalClient:
                 put(str(name), item)
             for alias in self._aliases.get(str(item.get("id") or ""), []):
                 put(alias, item)
+        # 补充目录（dionatha）排主目录之后：键冲突时 HD2Tool 优先
+        for item in self._dionatha_items:
+            put(str(item.get("nameEn") or ""), item)
+            put(str(item.get("slug") or ""), item)
+            put(str(item.get("model") or ""), item)
+            put(str(item.get("id") or ""), item)
+            for name in item.get("alternateNames") or []:
+                put(str(name), item)
         self._index = index
 
     def aliases_for(self, item_id: str) -> list[str]:

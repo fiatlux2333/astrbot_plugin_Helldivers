@@ -21,6 +21,7 @@ SOURCE_LABELS: Final[dict[str, str]] = {
     "companion": "Companion",
     "wiki": "Wiki",
     "hd2tool": "军需簿",
+    "dionatha": "补充目录",
     "bilibili": "B站动态",
     "screenshot": "截图",
     "translate": "翻译",
@@ -34,6 +35,7 @@ EXPECTED_SOURCES: Final[tuple[str, ...]] = (
     "bilibili",
     "wiki",
     "hd2tool",
+    "dionatha",
     "screenshot",
     "translate",
 )

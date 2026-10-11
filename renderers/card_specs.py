@@ -639,7 +639,9 @@ def build_arsenal_card(item: dict[str, Any], *, aliases: list[str] | None = None
         title=f"{kind} · {name_zh}",
         accent=FACTION_COLORS["Humans"],
         emblem="super_earth",
-        footer="数据: HD2Tool (MIT) · helldivers.wiki.gg",
+        footer=str(
+            item.get("_footer") or "数据: HD2Tool (MIT) · helldivers.wiki.gg"
+        ),
     )
 
     # 基本信息网格
@@ -664,6 +666,9 @@ def build_arsenal_card(item: dict[str, Any], *, aliases: list[str] | None = None
 
     if aliases:
         card.text(f"玩家俗称: {'、'.join(aliases[:5])}", muted=True)
+    description = str(item.get("description") or "")
+    if description:
+        card.text(description[:160], muted=True)
 
     # 护甲属性
     armor = item.get("armor")
@@ -712,7 +717,7 @@ def build_arsenal_card(item: dict[str, Any], *, aliases: list[str] | None = None
                 elif value:
                     parts.append(f"{zh} {value}")
             if parts:
-                card.field(f"{label}{suffix}", " · ".join(parts[:5]))
+                card.field(f"{label}{suffix}", " · ".join(parts[:7]))
 
     # 操控属性（弹匣/射速等）
     handling = item.get("handling")

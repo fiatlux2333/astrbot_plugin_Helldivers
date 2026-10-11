@@ -35,7 +35,7 @@
 
 - Companion 截图翻译降级顺序：全中文 → 最近翻译快照（2 小时内）→ 部分翻译 → 英文截图，翻译异常不会导致命令报错；后台每 5 分钟预热页面，正常请求直接返回缓存截图。
 - 群订阅（`/hd2news订阅`、`/银河快报订阅`）按动态/新闻 ID 持久化去重，首次订阅只记录基线，不补发历史内容；推送包含正文、图片与原动态出处。
-- `/hd2data` 装备数据来自开源 HD2Tool（MIT），敌人数据来自 helldivers.wiki.gg，首次使用自动下载，24 小时检查更新。
+- `/hd2data` 装备数据来自开源 HD2Tool（MIT），敌人数据来自 helldivers.wiki.gg，首次使用自动下载，24 小时检查更新；HD2Tool 未收录的新装备/新债券内容由 wiki.gg 补充目录（[dionatha API](https://helldivers-api.dionatha.com.br/)，每日同步，CC BY-NC-SA 4.0）兜底，卡片底部标注数据来源与版本。
 - `/planet` 支持中文名、编号、英文 slug 与 Companion 链接；仅允许访问 `helldiverscompanion.com` 的固定路由，无任意网页截图。
 
 ## 安装
