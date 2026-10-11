@@ -48,6 +48,7 @@ _HOST_KEYS: Final[tuple[tuple[str, str], ...]] = (
     ("helldivers.wiki.gg", "wiki"),
     ("raw.githubusercontent.com", "hd2tool"),
     ("gh-proxy.org", "hd2tool"),
+    ("cdn.jsdelivr.net", "hd2tool"),
 )
 
 

@@ -29,6 +29,7 @@ class KeyForHostTests(unittest.TestCase):
             "https://helldivers.wiki.gg/api.php": "wiki",
             "https://raw.githubusercontent.com/SalmonC/HD2Tool/main/x.json": "hd2tool",
             "https://gh-proxy.org/https://raw.githubusercontent.com/x/y": "hd2tool",
+            "https://cdn.jsdelivr.net/gh/SalmonC/HD2Tool@main/x.json": "hd2tool",
         }
         for url, expected in cases.items():
             with self.subTest(url=url):

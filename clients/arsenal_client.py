@@ -30,12 +30,14 @@ except ImportError:  # pragma: no cover - 单测环境
 RAW_URLS: Final[tuple[str, ...]] = (
     "https://raw.githubusercontent.com/SalmonC/HD2Tool/main/src/data/catalog.json",
     "https://gh-proxy.org/https://raw.githubusercontent.com/SalmonC/HD2Tool/main/src/data/catalog.json",
+    "https://cdn.jsdelivr.net/gh/SalmonC/HD2Tool@main/src/data/catalog.json",
 )
 ALIAS_URLS: Final[tuple[str, ...]] = (
     "https://raw.githubusercontent.com/SalmonC/HD2Tool/main/"
     "src/data/community-aliases.json",
     "https://gh-proxy.org/https://raw.githubusercontent.com/SalmonC/HD2Tool/main/"
     "src/data/community-aliases.json",
+    "https://cdn.jsdelivr.net/gh/SalmonC/HD2Tool@main/src/data/community-aliases.json",
 )
 ENEMIES_API: Final[str] = (
     "https://helldivers.wiki.gg/api.php?action=cargoquery&tables=Enemies"
