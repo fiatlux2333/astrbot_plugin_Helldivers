@@ -74,7 +74,6 @@ LabelKey: TypeAlias = Literal[
     "stats.deaths",
     "stats.planets_liberated",
     "stats.war_day",
-    "stats.no_personal_orders",
     # DSS
     "dss.title",
     "dss.full_title",
@@ -245,7 +244,6 @@ ZH_CN: Final[ZhCNLabels] = {
     "stats.deaths": "阵亡次数",
     "stats.planets_liberated": "解放星球",
     "stats.war_day": "战争日",
-    "stats.no_personal_orders": "当前没有活跃的个人任务。",
     # DSS
     "dss.title": "DSS",
     "dss.full_title": "民主空间站 · DSS",

@@ -156,29 +156,6 @@ class ModelTests(unittest.TestCase):
 
 
 class ApiClientTests(unittest.IsolatedAsyncioTestCase):
-    def test_external_url_validation_rejects_private_targets(self) -> None:
-        for url in (
-            "http://example.com/data.json",
-            "https://127.0.0.1/data.json",
-            "https://[::1]/data.json",
-            "https://localhost/data.json",
-            "https://user:pass@example.com/data.json",
-        ):
-            with self.subTest(url=url), self.assertRaises(ValueError):
-                HD2Client._external_url_target(url, allow_private=False)
-        self.assertEqual(
-            HD2Client._external_url_target(
-                "https://example.com/data.json", allow_private=False
-            ),
-            ("example.com", 443),
-        )
-        self.assertEqual(
-            HD2Client._external_url_target(
-                "http://127.0.0.1:8080/data.json", allow_private=True
-            ),
-            ("127.0.0.1", 8080),
-        )
-
     def test_external_hosts_do_not_receive_hd2_contact_headers(self) -> None:
         client = HD2Client(contact="contact@example.com")
         hd2_headers = client._headers_for_url(
@@ -190,91 +167,6 @@ class ApiClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(hd2_headers["X-Super-Contact"], "contact@example.com")
         self.assertNotIn("X-Super-Contact", steam_headers)
         self.assertNotIn("X-Super-Client", steam_headers)
-
-    async def test_personal_order_does_not_mutate_client_settings(self) -> None:
-        class RecordingClient(HD2Client):
-            async def request_external_json(self, url, **kwargs):
-                self.external_kwargs = kwargs
-                return []
-
-        client = RecordingClient(retry_max_attempts=3, timeout=30)
-        original_timeout = client.timeout
-        result = await client.fetch_personal_order("https://example.com/order.json")
-        self.assertEqual(result, [])
-        self.assertEqual(client.retry_max_attempts, 3)
-        self.assertIs(client.timeout, original_timeout)
-        self.assertEqual(client.external_kwargs["timeout"], 10.0)
-        self.assertFalse(client.external_kwargs["allow_private"])
-
-    async def test_personal_order_builtin_source_keeps_only_active_po(self) -> None:
-        class RecordingClient(HD2Client):
-            async def request_external_json(self, url, **kwargs):
-                return {
-                    "timestampUtc": datetime.now(timezone.utc).isoformat(),
-                    "data": [
-                        {
-                            "expiresIn": 100,
-                            "setting": {"type": 0},
-                        },
-                        {
-                            "id32": 42,
-                            "expiresIn": 100,
-                            "setting": {"type": 2},
-                        },
-                        {
-                            "expiresIn": 0,
-                            "setting": {"type": 2},
-                        },
-                    ],
-                }
-
-        result = await RecordingClient().fetch_personal_order()
-        self.assertEqual(result, [{"id32": 42, "expiresIn": 100, "setting": {"type": 2}}])
-
-    async def test_personal_order_builtin_source_rejects_stale_snapshot(self) -> None:
-        class RecordingClient(HD2Client):
-            async def request_external_json(self, url, **kwargs):
-                return {
-                    "timestampUtc": (
-                        datetime.now(timezone.utc) - timedelta(days=4)
-                    ).isoformat(),
-                    "data": [
-                        {
-                            "expiresIn": 100,
-                            "setting": {"type": 2},
-                        }
-                    ],
-                }
-
-        self.assertIsNone(await RecordingClient().fetch_personal_order())
-
-    async def test_personal_order_expiration_is_adjusted_for_snapshot_age(self) -> None:
-        class RecordingClient(HD2Client):
-            async def request_external_json(self, url, **kwargs):
-                return {
-                    "timestampUtc": (
-                        datetime.now(timezone.utc) - timedelta(hours=2)
-                    ).isoformat(),
-                    "data": [
-                        {
-                            "id32": 1,
-                            "expiresIn": 3600,
-                            "setting": {"type": 2},
-                        },
-                        {
-                            "id32": 2,
-                            "expiresIn": 10800,
-                            "setting": {"type": 2},
-                        },
-                    ],
-                }
-
-        result = await RecordingClient().fetch_personal_order()
-        self.assertIsInstance(result, list)
-        assert isinstance(result, list)
-        self.assertEqual([item["id32"] for item in result], [2])
-        self.assertGreater(result[0]["expiresIn"], 3500)
-        self.assertLessEqual(result[0]["expiresIn"], 3600)
 
     async def test_official_steam_news_uses_single_attempt(self) -> None:
         class RecordingClient(HD2Client):

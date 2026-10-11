@@ -26,9 +26,6 @@ class KeyForHostTests(unittest.TestCase):
             "https://api.helldivers2.dev/raw/api/Stats/war/801/summary": "hd2_api",
             "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/": "steam",
             "https://helldiverscompanion.com/api/steam-api/news": "companion",
-            "https://cdn.helldiverscompanion.com/live/personalOrders/current.json": (
-                "companion_cdn"
-            ),
             "https://helldivers.wiki.gg/api.php": "wiki",
             "https://raw.githubusercontent.com/SalmonC/HD2Tool/main/x.json": "hd2tool",
             "https://gh-proxy.org/https://raw.githubusercontent.com/x/y": "hd2tool",
@@ -40,12 +37,6 @@ class KeyForHostTests(unittest.TestCase):
     def test_unknown_host_falls_back_to_hostname(self) -> None:
         self.assertEqual(
             key_for_host("https://example.com/live/orders.json"), "example.com"
-        )
-
-    def test_cdn_priority_before_parent_domain(self) -> None:
-        # cdn.helldiverscompanion.com 不能被 helldiverscompanion.com 规则先吃掉
-        self.assertNotEqual(
-            key_for_host("https://cdn.helldiverscompanion.com/a.json"), "companion"
         )
 
 
@@ -281,33 +272,6 @@ class HD2ClientInstrumentationTests(unittest.TestCase):
         self.assertIn("steam", snap)
         self.assertIn("companion", snap)
         self.assertNotIn("hd2_api", snap)
-
-    def test_external_json_success_records_cdn_key(self) -> None:
-        client = _make_client()
-        fake_session = _FakeSession(
-            [_FakeResponse(200, {"timestampUtc": "2026-09-25T00:00:00Z"})]
-        )
-
-        class _FakeClientSession:
-            async def __aenter__(self):
-                return fake_session
-
-            async def __aexit__(self, exc_type, exc, tb):
-                return False
-
-        with patch(
-            "astrbot_plugin_Helldivers.clients.api_client.aiohttp.ClientSession",
-            return_value=_FakeClientSession(),
-        ):
-            data = self._run(
-                client.request_external_json(
-                    "https://cdn.helldiverscompanion.com/live/personalOrders/current.json"
-                )
-            )
-        self.assertIsNotNone(data)
-        record = HEALTH.snapshot()["companion_cdn"]
-        self.assertEqual(record.ok_count, 1)
-
 
 if __name__ == "__main__":
     unittest.main()

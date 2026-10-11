@@ -438,18 +438,6 @@
     "type": "string",
     "default": ""
   },
-  "personal_order_api_url": {
-    "description": "个人任务 JSON 数据源 URL",
-    "type": "string",
-    "hint": "默认使用 Companion 社区 CDN；插件会拒绝超过 3 天的旧快照。未发现 Arrowhead 官方公开 Personal Order API",
-    "default": "https://cdn.helldiverscompanion.com/live/personalOrders/current.json"
-  },
-  "allow_private_personal_order_url": {
-    "description": "允许个人指令数据源访问私有网络",
-    "type": "bool",
-    "hint": "仅在使用可信的局域网或本机 JSON 服务时开启；开启后允许 HTTP 和私有 IP",
-    "default": false
-  },
   "campaign_history_hours": {
     "description": "战役趋势历史保留小时数",
     "type": "float",

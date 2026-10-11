@@ -24,7 +24,6 @@ from .renderers.card_specs import (
     build_global_events_card,
     build_news_card,
     build_order_card,
-    build_personal_order_card,
     build_planet_candidates_card,
     build_planet_card,
     build_stats_card,
@@ -41,7 +40,6 @@ from .core.formatters import (
     format_map_caption,
     format_news_message,
     format_order_message,
-    format_personal_order_message,
     format_planet_candidates,
     format_planet_message,
     format_stats_message,
@@ -154,8 +152,6 @@ class HelldiversService:
         translate_wiki: bool = True,
         map_renderer: MapRenderer | None = None,
         enable_map: bool = True,
-        personal_order_api_url: str = "",
-        allow_private_personal_order_url: bool = False,
         card_renderer: CardRenderer | None = None,
         dashboard_renderer: DashboardRenderer | None = None,
         stats_renderer: StatsRenderer | None = None,
@@ -193,10 +189,6 @@ class HelldiversService:
         self.translate_wiki = translate_wiki and enable_translation
         self.map_renderer = map_renderer
         self.enable_map = enable_map
-        self.personal_order_api_url = personal_order_api_url or ""
-        self.allow_private_personal_order_url = bool(
-            allow_private_personal_order_url
-        )
         self.card_renderer = card_renderer
         self.dashboard_renderer = dashboard_renderer
         self.stats_renderer = stats_renderer
@@ -2068,87 +2060,6 @@ class HelldiversService:
         card = build_global_events_card(legacy)
         p = await self._render_card(card)
         return [p] if p else []
-
-    async def get_personal_order_message(self) -> str:
-        try:
-            data = await self.client.fetch_personal_order(
-                self.personal_order_api_url,
-                allow_private=self.allow_private_personal_order_url,
-            )
-            if data and self.enable_translation and isinstance(data, (dict, list)):
-                # 轻量翻译标题字段
-                item = data[0] if isinstance(data, list) and data else data
-                if isinstance(item, dict):
-                    setting = (
-                        item.get("setting")
-                        if isinstance(item.get("setting"), dict)
-                        else {}
-                    )
-                    for container in (setting, item):
-                        if not isinstance(container, dict):
-                            continue
-                        for field in (
-                            "overrideTitle",
-                            "overrideBrief",
-                            "taskDescription",
-                            "title",
-                            "brief",
-                            "description",
-                            "message",
-                        ):
-                            text = container.get(field)
-                            if isinstance(text, str) and len(text.strip()) >= 3:
-                                container[field] = await self._translate_cached_text(
-                                    "personal_order",
-                                    field,
-                                    text,
-                                )
-            return format_personal_order_message(data)
-        except Exception as e:
-            logger.exception(f"[HD2] personal order error: {e}")
-            return format_personal_order_message(None)
-
-    async def get_personal_order_image(self) -> list[Path]:
-        try:
-            data = await self.client.fetch_personal_order(
-                self.personal_order_api_url,
-                allow_private=self.allow_private_personal_order_url,
-            )
-            if data and self.enable_translation and isinstance(data, (dict, list)):
-                item = data[0] if isinstance(data, list) and data else data
-                if isinstance(item, dict):
-                    setting = (
-                        item.get("setting")
-                        if isinstance(item.get("setting"), dict)
-                        else {}
-                    )
-                    for container in (setting, item):
-                        if not isinstance(container, dict):
-                            continue
-                        for field in (
-                            "overrideTitle",
-                            "overrideBrief",
-                            "taskDescription",
-                            "title",
-                            "brief",
-                            "description",
-                            "message",
-                        ):
-                            text = container.get(field)
-                            if isinstance(text, str) and len(text.strip()) >= 3:
-                                container[field] = await self._translate_cached_text(
-                                    "personal_order",
-                                    field,
-                                    text,
-                                )
-            card = build_personal_order_card(data)
-            p = await self._render_card(card)
-            return [p] if p else []
-        except Exception as e:
-            logger.exception(f"[HD2] personal order error: {e}")
-            card = build_personal_order_card(None)
-            p = await self._render_card(card)
-            return [p] if p else []
 
     async def get_map_result(self) -> tuple[str, Path | None]:
         """返回 (说明文字, 图片路径或 None)。"""

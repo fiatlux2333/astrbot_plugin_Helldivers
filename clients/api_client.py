@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import random
 import re
-import socket
 import time
 from datetime import datetime, timezone
 from typing import Any, Optional
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urlsplit
 
 import aiohttp
 from astrbot.api import logger
@@ -23,15 +21,10 @@ class HD2Client:
     """统一的 HD2 API 访问层，带有限次重试 + 全局限流。"""
 
     RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
-    REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
     COMPANION_NEWS_URL = "https://helldiverscompanion.com/api/steam-api/news"
     COMPANION_WAR_DATA_URL = (
         "https://helldiverscompanion.com/api/hell-divers-2-api/get-api-data-live"
     )
-    COMPANION_PERSONAL_ORDER_URL = (
-        "https://cdn.helldiverscompanion.com/live/personalOrders/current.json"
-    )
-    PERSONAL_ORDER_MAX_AGE_SECONDS = 3 * 24 * 60 * 60
 
     def __init__(
         self,
@@ -260,151 +253,6 @@ class HD2Client:
                 f"HD2 API {method} {url} exhausted retries: "
                 f"{self._format_error(last_error)}"
             )
-        return None
-
-    @staticmethod
-    def _external_url_target(
-        url: str,
-        *,
-        allow_private: bool,
-    ) -> tuple[str, int]:
-        parsed = urlsplit(url)
-        if parsed.scheme not in {"http", "https"}:
-            raise ValueError("external URL must use http or https")
-        if not allow_private and parsed.scheme != "https":
-            raise ValueError("external URL must use https")
-        if parsed.username or parsed.password:
-            raise ValueError("external URL must not contain userinfo")
-        host = (parsed.hostname or "").rstrip(".").lower()
-        if not host:
-            raise ValueError("external URL has no hostname")
-        try:
-            port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        except ValueError as exc:
-            raise ValueError("external URL has an invalid port") from exc
-        if allow_private:
-            return host, port
-        if host == "localhost" or host.endswith(".localhost"):
-            raise ValueError("external URL resolves to localhost")
-        try:
-            address = ipaddress.ip_address(host.split("%", 1)[0])
-        except ValueError:
-            address = None
-        if address is not None and not address.is_global:
-            raise ValueError("external URL uses a non-public IP address")
-        return host, port
-
-    async def _validate_external_url(
-        self,
-        url: str,
-        *,
-        allow_private: bool,
-    ) -> None:
-        host, port = self._external_url_target(url, allow_private=allow_private)
-        if allow_private or self.proxy_url:
-            return
-        try:
-            infos = await asyncio.to_thread(
-                socket.getaddrinfo,
-                host,
-                port,
-                type=socket.SOCK_STREAM,
-            )
-        except OSError as exc:
-            raise ValueError(f"external URL hostname could not be resolved: {host}") from exc
-        if not infos:
-            raise ValueError(f"external URL hostname could not be resolved: {host}")
-        for info in infos:
-            try:
-                address = ipaddress.ip_address(str(info[4][0]).split("%", 1)[0])
-            except (ValueError, IndexError, TypeError) as exc:
-                raise ValueError("external URL DNS result is invalid") from exc
-            if not address.is_global:
-                raise ValueError("external URL DNS resolved to a non-public address")
-
-    @staticmethod
-    def _validate_response_peer(response: aiohttp.ClientResponse) -> None:
-        connection = getattr(response, "connection", None)
-        transport = getattr(connection, "transport", None)
-        if transport is None:
-            return
-        peer = transport.get_extra_info("peername")
-        if not peer:
-            return
-        try:
-            address = ipaddress.ip_address(str(peer[0]).split("%", 1)[0])
-        except (ValueError, IndexError, TypeError) as exc:
-            raise ValueError("external URL peer address is invalid") from exc
-        if not address.is_global:
-            raise ValueError("external URL connected to a non-public address")
-
-    async def request_external_json(
-        self,
-        url: str,
-        *,
-        timeout: float = 10.0,
-        allow_private: bool = False,
-        max_redirects: int = 3,
-    ) -> Any:
-        current = str(url or "").strip()
-        redirect_limit = max(0, int(max_redirects))
-        started = time.perf_counter()
-        clean_headers = {
-            "Accept": "application/json",
-            "User-Agent": self.headers["User-Agent"],
-        }
-        client_timeout = aiohttp.ClientTimeout(total=max(1.0, float(timeout)))
-        async with aiohttp.ClientSession(
-            headers=clean_headers,
-            timeout=client_timeout,
-        ) as session:
-            for redirect_count in range(redirect_limit + 1):
-                await self._validate_external_url(
-                    current, allow_private=allow_private
-                )
-                await self._throttle()
-                async with session.get(
-                    current,
-                    proxy=self.proxy_url,
-                    allow_redirects=False,
-                ) as response:
-                    if not self.proxy_url and not allow_private:
-                        self._validate_response_peer(response)
-                    if response.status in self.REDIRECT_STATUSES:
-                        if redirect_count >= redirect_limit:
-                            raise ValueError("external URL redirected too many times")
-                        location = str(
-                            response.headers.get("Location") or ""
-                        ).strip()
-                        if not location:
-                            raise ValueError(
-                                "external URL redirect has no Location header"
-                            )
-                        current = urljoin(current, location)
-                        continue
-                    if response.status != 200:
-                        logger.warning(
-                            "HD2 external JSON request failed status=%s url=%s",
-                            response.status,
-                            current,
-                        )
-                        HEALTH.record_fail(
-                            key_for_host(current), detail=f"HTTP {response.status}"
-                        )
-                        return None
-                    try:
-                        data = await response.json(content_type=None)
-                    except Exception as exc:
-                        HEALTH.record_fail(
-                            key_for_host(current), detail=f"bad json: {exc}"
-                        )
-                        return None
-                    HEALTH.record_ok(
-                        key_for_host(current),
-                        detail=urlsplit(current).path or "/",
-                        latency_ms=(time.perf_counter() - started) * 1000.0,
-                    )
-                    return data
         return None
 
     async def get_json(self, path: str) -> Any:
@@ -667,74 +515,3 @@ class HD2Client:
         """兼容旧调用：从 raw WarStatus 提取 globalEvents。"""
         return await self.fetch_war_status_events()
 
-    async def fetch_personal_order(
-        self,
-        api_url: str | None = None,
-        *,
-        allow_private: bool = False,
-    ) -> Optional[dict[str, Any] | list[Any]]:
-        """Fetch Personal Orders from a configured source or Companion CDN.
-
-        Arrowhead does not expose a documented public Personal Order API. The
-        built-in community source is rejected when its snapshot is older than
-        three days so expired orders are never presented as current.
-        """
-        configured_url = (api_url or "").strip()
-        url = configured_url or self.COMPANION_PERSONAL_ORDER_URL
-        is_builtin_source = (
-            url.rstrip("/") == self.COMPANION_PERSONAL_ORDER_URL.rstrip("/")
-        )
-        try:
-            data = await self.request_external_json(
-                url,
-                timeout=10.0,
-                allow_private=allow_private,
-            )
-        except (OSError, ValueError, aiohttp.ClientError) as exc:
-            logger.warning("[HD2] personal order URL rejected or unavailable: %s", exc)
-            return None
-        if not isinstance(data, (dict, list)):
-            return None
-
-        if is_builtin_source:
-            if not isinstance(data, dict):
-                return None
-            timestamp = str(data.get("timestampUtc") or "").strip()
-            try:
-                source_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-                if source_time.tzinfo is None:
-                    source_time = source_time.replace(tzinfo=timezone.utc)
-                source_age = (datetime.now(timezone.utc) - source_time).total_seconds()
-            except (TypeError, ValueError):
-                logger.warning("[HD2] Companion personal order timestamp is invalid")
-                return None
-            if source_age < 0 or source_age > self.PERSONAL_ORDER_MAX_AGE_SECONDS:
-                logger.warning(
-                    "[HD2] Companion personal order snapshot is stale: %s",
-                    timestamp,
-                )
-                return None
-
-            payload = data.get("data")
-            if not isinstance(payload, list):
-                return None
-            active: list[dict[str, Any]] = []
-            elapsed_seconds = max(0, int(source_age))
-            for item in payload:
-                if not isinstance(item, dict):
-                    continue
-                setting = item.get("setting")
-                order_type = setting.get("type") if isinstance(setting, dict) else None
-                try:
-                    expires_in = int(item.get("expiresIn") or 0)
-                    type_id = int(order_type)
-                except (TypeError, ValueError):
-                    continue
-                remaining = expires_in - elapsed_seconds
-                if type_id == 2 and remaining > 0:
-                    active_item = dict(item)
-                    active_item["expiresIn"] = remaining
-                    active.append(active_item)
-            return active
-
-        return data

@@ -2,7 +2,7 @@
 
 指令:
   /hd2stats /dashboard /order /hd2news /steam /wiki /hd2data
-  /major_order /personal_order /map /dss
+  /major_order /map /dss
   /global_events /warfront /planet
 /银河快报
 /hd2 | /hd2help
@@ -89,7 +89,6 @@ Helldivers 2 银河战争 {PLUGIN_VERSION}
 /dashboard            银河战争总览（实时数据）
 /hd2stats             银河战争详细统计（实时数据）
 /major_order          主要任务（同 /order）
-/personal_order       个人任务
 /map                  战争地图（阵营领土）
 /dss                  Companion 民主空间站图文
 /global_events        全球事件
@@ -120,7 +119,6 @@ HDHELP_TEXT = f"""\
 /dashboard            银河战争总览（防御/解放/重点战线）
 /hd2stats             在线人数、击杀、命中率等统计
 /order                当前最高指令任务卡
-/po                   当前个人指令
 
 【Companion 截图 · 翻译】
 /hd2news              最新新闻（截图+翻译）
@@ -496,10 +494,6 @@ class HelldiversPlugin(Star):
             translate_wiki=bool(self._cfg("translate_wiki", True)),
             map_renderer=map_renderer,
             enable_map=bool(self._cfg("enable_map", True)),
-            personal_order_api_url=str(self._cfg("personal_order_api_url", "") or ""),
-            allow_private_personal_order_url=bool(
-                self._cfg("allow_private_personal_order_url", False)
-            ),
             card_renderer=card_renderer,
             dashboard_renderer=dashboard_renderer,
             stats_renderer=stats_renderer,
@@ -1397,23 +1391,6 @@ class HelldiversPlugin(Star):
         except Exception as e:
             logger.exception(f"[HD2] /hd2data error: {e}")
             yield event.plain_result("❌ 军需簿查询失败，请稍后重试。")
-
-    @filter.command("personal_order", alias={"个人任务", "po"})
-    @_command_handler
-    async def cmd_personal_order(
-        self, event: AstrMessageEvent
-    ) -> AsyncGenerator[Any, None]:
-        """查看个人任务 Personal Order（图片）"""
-        try:
-            paths = await self._svc().get_personal_order_image()
-        except Exception as e:
-            logger.exception(f"[HD2] /personal_order error: {e}")
-            yield event.plain_result("❌ 获取个人任务失败，请稍后重试。")
-            return
-        async for r in self._yield_images(
-            event, paths, fallback="❌ 获取个人任务失败，请稍后重试。"
-        ):
-            yield r
 
     @filter.command("dss", alias={"空间站", "民主空间站"})
     @_command_handler

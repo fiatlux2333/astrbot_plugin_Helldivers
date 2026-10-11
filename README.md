@@ -10,7 +10,6 @@
 /dashboard                         银河战争总览（实时数据）
 /hd2stats                          银河战争统计（实时数据）
 /order 或 /major_order             当前重要指令
-/personal_order 或 /po             当前个人指令
 /hd2news                           Companion 最新新闻截图
 /hd2news订阅 / /hd2news退订         当前群新闻推送开关
 /companion                         Companion 首页截图（含翻译）
@@ -220,8 +219,6 @@ Cookie 是登录凭据，不要发给他人或提交到仓库。若登录验证�
 | `enable_map` | bool | `true` | 启用银河战争地图 |
 | `steam_news_count` | int | `10` | Steam 公告缓存数量 |
 | `steam_image_enabled` | bool | `true` | 启用 Steam 公告主图 |
-| `personal_order_api_url` | string | Companion CDN | 个人指令 JSON 数据源 |
-| `allow_private_personal_order_url` | bool | `false` | 允许本机/局域网个人指令源 |
 | `remote_image_max_bytes` | int | `8388608` | 远程新闻图片最大字节数 |
 | `image_cache_max_mb` | int | `150` | 远程图片缓存上限（MiB） |
 
@@ -229,7 +226,6 @@ Cookie 是登录凭据，不要发给他人或提交到仓库。若登录验证�
 
 1. 建议填写 `api_contact` 并保持合理的刷新间隔；出现 429 时增大 `cache_update_interval` 与 `min_request_interval`。
 2. Steam 官方接口不可达时自动尝试社区备用源；国内网络可配置 `proxy_url`。
-3. 个人指令无官方 API，默认使用 Companion 社区 CDN，拒绝超过 3 天的旧快照并按快照年龄校正剩余时间。
 4. 免费/慢速翻译模型建议保持 `translation_stream=false` 与 `translation_max_tokens=1200`；正式模型可适当调大。
 5. `companion_screenshot_cache_ttl` 建议与 `companion_warmup_interval` 保持一致（默认均 300 秒）。
 6. AstrBot 4.26.x 热重载可能残留旧 handler 导致重复回复，插件已内置兼容包装器，完整重启可彻底清理。

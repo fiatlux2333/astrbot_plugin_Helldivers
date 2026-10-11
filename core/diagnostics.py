@@ -19,7 +19,6 @@ SOURCE_LABELS: Final[dict[str, str]] = {
     "hd2_api": "主API",
     "steam": "Steam",
     "companion": "Companion",
-    "companion_cdn": "个人订单CDN",
     "wiki": "Wiki",
     "hd2tool": "军需簿",
     "bilibili": "B站动态",
@@ -31,7 +30,6 @@ SOURCE_LABELS: Final[dict[str, str]] = {
 EXPECTED_SOURCES: Final[tuple[str, ...]] = (
     "hd2_api",
     "companion",
-    "companion_cdn",
     "steam",
     "bilibili",
     "wiki",
@@ -43,7 +41,6 @@ EXPECTED_SOURCES: Final[tuple[str, ...]] = (
 # 主机名后缀 → 逻辑数据源。cdn.helldiverscompanion.com 必须排在
 # helldiverscompanion.com 之前（后者是前者的后缀子串）。
 _HOST_KEYS: Final[tuple[tuple[str, str], ...]] = (
-    ("cdn.helldiverscompanion.com", "companion_cdn"),
     ("api.helldivers2.dev", "hd2_api"),
     ("api.steampowered.com", "steam"),
     ("steamcommunity.com", "steam"),
