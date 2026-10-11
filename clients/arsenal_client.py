@@ -27,17 +27,18 @@ except ImportError:  # pragma: no cover - 单测环境
 
     logger = logging.getLogger(__name__)
 
+# 顺序对境内服务器有意义：前两路可直连成功，raw 直连作末位兜底
 RAW_URLS: Final[tuple[str, ...]] = (
-    "https://raw.githubusercontent.com/SalmonC/HD2Tool/main/src/data/catalog.json",
     "https://gh-proxy.org/https://raw.githubusercontent.com/SalmonC/HD2Tool/main/src/data/catalog.json",
     "https://cdn.jsdelivr.net/gh/SalmonC/HD2Tool@main/src/data/catalog.json",
+    "https://raw.githubusercontent.com/SalmonC/HD2Tool/main/src/data/catalog.json",
 )
 ALIAS_URLS: Final[tuple[str, ...]] = (
-    "https://raw.githubusercontent.com/SalmonC/HD2Tool/main/"
-    "src/data/community-aliases.json",
     "https://gh-proxy.org/https://raw.githubusercontent.com/SalmonC/HD2Tool/main/"
     "src/data/community-aliases.json",
     "https://cdn.jsdelivr.net/gh/SalmonC/HD2Tool@main/src/data/community-aliases.json",
+    "https://raw.githubusercontent.com/SalmonC/HD2Tool/main/"
+    "src/data/community-aliases.json",
 )
 # wiki.gg 补充目录（dionatha 托管，每日同步，CC BY-NC-SA）：覆盖 HD2Tool 目录
 # 未收录的新债券/新装备，查询未命中主目录时由同一索引兜底
@@ -476,7 +477,9 @@ class ArsenalClient:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(f"[HD2] arsenal download failed: {exc}")
+            logger.warning(
+                f"[HD2] arsenal download failed: {type(exc).__name__}: {exc}"
+            )
             HEALTH.record_fail("hd2tool", detail=str(exc))
             return False
 
@@ -516,7 +519,9 @@ class ArsenalClient:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.warning(f"[HD2] arsenal mirror failed ({url}): {exc}")
+                logger.warning(
+                f"[HD2] arsenal mirror failed ({url}): {type(exc).__name__}: {exc}"
+            )
         return None
 
     # ---- wiki.gg 补充目录（dionatha）----
@@ -696,7 +701,9 @@ class ArsenalClient:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(f"[HD2] dionatha {collection} failed: {exc}")
+            logger.warning(
+                f"[HD2] dionatha {collection} failed: {type(exc).__name__}: {exc}"
+            )
             return None
 
     def _try_load_dionatha_disk(self) -> bool:
@@ -940,7 +947,9 @@ class ArsenalClient:
                     raise
                 except Exception as exc:
                     self._enemies_failed_at = time.time()
-                    logger.warning(f"[HD2] enemies download failed: {exc}")
+                    logger.warning(
+                        f"[HD2] enemies download failed: {type(exc).__name__}: {exc}"
+                    )
                     HEALTH.record_fail("wiki", detail=f"enemies: {exc}")
         try:
             raw = json.loads(enemies_path.read_text(encoding="utf-8"))
