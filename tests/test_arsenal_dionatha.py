@@ -50,6 +50,7 @@ class DionathaConvertTests(unittest.TestCase):
     def test_weapon_converts_to_hd2tool_shape(self) -> None:
         item = _convert("weapons", _weapon())
         self.assertEqual(item["id"], "dionatha:ar-11-arbitrator")
+        self.assertEqual(item["slug"], "ar-11-arbitrator")
         self.assertEqual(item["productKind"], "primary-weapon")
         self.assertEqual(item["nameZh"], "")
         self.assertEqual(item["model"], "AR-11")
@@ -180,8 +181,14 @@ class DionathaIndexTests(unittest.TestCase):
 
     def test_search_hits_supplemental_items(self) -> None:
         client = self._client()
-        # 完整名 / 规范化 / 前缀 / 俗称 多路都应命中补充条目
-        for query in ("AR-11 Arbitrator", "ar11arbitrator", "AR-11", "arbiter"):
+        # 完整名 / 规范化 / 前缀 / 俗称 / slug 多路都应命中补充条目
+        for query in (
+            "AR-11 Arbitrator",
+            "ar11arbitrator",
+            "AR-11",
+            "arbiter",
+            "ar-11-arbitrator",
+        ):
             with self.subTest(query=query):
                 results = client.search(query)
                 self.assertTrue(results)

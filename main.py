@@ -1305,6 +1305,8 @@ class HelldiversPlugin(Star):
                 if arsenal.data_version:
                     detail += f" (v{arsenal.data_version})"
                 detail += f" {arsenal.item_count} 条"
+                if arsenal.dionatha_count:
+                    detail += f" +补充 {arsenal.dionatha_count}"
                 parts.append(detail)
             else:
                 parts.append("目录未下载")

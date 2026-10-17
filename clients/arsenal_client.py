@@ -427,6 +427,10 @@ class ArsenalClient:
         return len(self._items)
 
     @property
+    def dionatha_count(self) -> int:
+        return len(self._dionatha_items)
+
+    @property
     def enemy_count(self) -> int:
         return len(self._enemies)
 
@@ -465,7 +469,7 @@ class ArsenalClient:
                     (RAW_URLS, catalog_path),
                     (ALIAS_URLS, aliases_path),
                 ):
-                    body = await self._fetch_any(session, urls)
+                    body = await self._fetch_any(session, urls, proxy=self.proxy_url)
                     if body is None:
                         HEALTH.record_fail("hd2tool", detail="镜像全部失败")
                         return False
@@ -504,12 +508,19 @@ class ArsenalClient:
 
     @staticmethod
     async def _fetch_any(
-        session: aiohttp.ClientSession, urls: tuple[str, ...]
+        session: aiohttp.ClientSession,
+        urls: tuple[str, ...],
+        *,
+        proxy: str | None = None,
     ) -> bytes | None:
-        """依次尝试多个镜像 URL，返回首个成功的响应体。"""
+        """依次尝试多个镜像 URL，返回首个成功的响应体。
+
+        proxy 必须显式传入：session 统一 trust_env=False，不读环境变量，
+        境内用户靠 proxy_url 兜底 raw.githubusercontent.com 末位直连。
+        """
         for url in urls:
             try:
-                async with session.get(url, proxy=None) as resp:
+                async with session.get(url, proxy=proxy) as resp:
                     if resp.status != 200:
                         logger.warning(
                             f"[HD2] arsenal download HTTP {resp.status}: {url}"
@@ -520,8 +531,8 @@ class ArsenalClient:
                 raise
             except Exception as exc:
                 logger.warning(
-                f"[HD2] arsenal mirror failed ({url}): {type(exc).__name__}: {exc}"
-            )
+                    f"[HD2] arsenal mirror failed ({url}): {type(exc).__name__}: {exc}"
+                )
         return None
 
     # ---- wiki.gg 补充目录（dionatha）----
@@ -543,6 +554,7 @@ class ArsenalClient:
         wiki = raw.get("wiki") if isinstance(raw.get("wiki"), dict) else {}
         item: dict[str, Any] = {
             "id": f"dionatha:{slug}",
+            "slug": slug,
             "model": model_m.group(0).upper().replace(" ", "-") if model_m else "",
             "nameZh": "",
             "nameEn": name,
@@ -706,27 +718,42 @@ class ArsenalClient:
             )
             return None
 
-    def _try_load_dionatha_disk(self) -> bool:
-        """重启后直接吃磁盘缓存，全部集合新鲜才返回 True。"""
-        collected: dict[str, list] = {}
+    @staticmethod
+    def _read_dionatha_disk(
+        cache_dir: Path,
+    ) -> tuple[dict[str, list[dict[str, Any]]], str, float] | None:
+        """同步读全部集合磁盘缓存（在线程池执行）；任一缺失/过期/损坏返回 None。"""
+        collected: dict[str, list[dict[str, Any]]] = {}
         data_version = ""
         newest_mtime = 0.0
         for collection in DIONATHA_COLLECTIONS:
-            path = self.cache_dir / f"dionatha_{collection}.json"
-            if not path.is_file():
-                return False
-            if time.time() - path.stat().st_mtime > REFRESH_INTERVAL:
-                return False
+            path = cache_dir / f"dionatha_{collection}.json"
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                return None
+            if time.time() - mtime > REFRESH_INTERVAL:
+                return None
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
-                return False
+                return None
             rows = payload.get("data")
             if not isinstance(rows, list) or not rows:
-                return False
-            data_version = str((payload.get("meta") or {}).get("dataVersion") or data_version)
+                return None
+            data_version = str(
+                (payload.get("meta") or {}).get("dataVersion") or data_version
+            )
             collected[collection] = [x for x in rows if isinstance(x, dict)]
-            newest_mtime = max(newest_mtime, path.stat().st_mtime)
+            newest_mtime = max(newest_mtime, mtime)
+        return collected, data_version, newest_mtime
+
+    async def _try_load_dionatha_disk(self) -> bool:
+        """重启后直接吃磁盘缓存（IO 走线程池），全部集合新鲜才返回 True。"""
+        loaded = await asyncio.to_thread(self._read_dionatha_disk, self.cache_dir)
+        if loaded is None:
+            return False
+        collected, data_version, newest_mtime = loaded
         passives_by_id = {
             str(x.get("id") or ""): str(x.get("name") or "")
             for x in collected.get("passives", [])
@@ -753,7 +780,7 @@ class ArsenalClient:
             if not force and self._dionatha_loaded_at:
                 if time.time() - self._dionatha_loaded_at < REFRESH_INTERVAL:
                     return True
-            if not force and self._try_load_dionatha_disk():
+            if not force and await self._try_load_dionatha_disk():
                 return True
             if (
                 not force
