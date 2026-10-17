@@ -738,6 +738,8 @@ class ArsenalClient:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 return None
+            if not isinstance(payload, dict):
+                return None
             rows = payload.get("data")
             if not isinstance(rows, list) or not rows:
                 return None
@@ -780,8 +782,19 @@ class ArsenalClient:
             if not force and self._dionatha_loaded_at:
                 if time.time() - self._dionatha_loaded_at < REFRESH_INTERVAL:
                     return True
-            if not force and await self._try_load_dionatha_disk():
-                return True
+            if not force:
+                # 磁盘缓存异常（如损坏/结构意外）只降级到网络路径，
+                # 不能让后台同步任务带未取回异常死掉
+                try:
+                    if await self._try_load_dionatha_disk():
+                        return True
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - 防御路径
+                    logger.warning(
+                        f"[HD2] dionatha disk cache load failed: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
             if (
                 not force
                 and self._dionatha_failed_at

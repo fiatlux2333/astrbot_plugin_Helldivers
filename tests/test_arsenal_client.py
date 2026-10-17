@@ -10,7 +10,9 @@ import time
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
+from astrbot_plugin_Helldivers.clients import arsenal_client as arsenal_module
 from astrbot_plugin_Helldivers.clients.arsenal_client import (
     DIONATHA_COLLECTIONS,
     REFRESH_INTERVAL,
@@ -104,6 +106,19 @@ class FetchAnyTests(unittest.TestCase):
         self.assertEqual(len(session.calls), 3)
 
 
+class _SessionCtx:
+    """包住 _FakeSession 冒充 aiohttp.ClientSession 的 async with。"""
+
+    def __init__(self, session: _FakeSession) -> None:
+        self._session = session
+
+    async def __aenter__(self) -> _FakeSession:
+        return self._session
+
+    async def __aexit__(self, *exc: Any) -> bool:
+        return False
+
+
 class _BareClient:
     """跳过 __init__ 的网络/目录副作用，只挂测试需要的属性。"""
 
@@ -115,7 +130,43 @@ class _BareClient:
         client._aliases = {}
         client._dionatha_items = []
         client._index = {}
+        client.proxy_url = None
+        client.timeout_seconds = 5
+        client.user_agent = "unit-test"
         return client
+
+
+class DownloadProxyTests(unittest.TestCase):
+    """锁住 _download → _fetch_any 的 proxy_url 透传链（曾漏传，proxy 配置静默失效）。"""
+
+    def test_download_forwards_proxy_to_every_fetch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            session = _FakeSession(
+                [
+                    _FakeResp(200, b'{"items": []}'),
+                    _FakeResp(200, b'{"entries": []}'),
+                ]
+            )
+            client = _BareClient.make(cache)
+            client.proxy_url = "http://127.0.0.1:7890"
+            with mock.patch.object(
+                arsenal_module.aiohttp,
+                "ClientSession",
+                lambda **kwargs: _SessionCtx(session),
+            ), mock.patch.object(arsenal_module, "HEALTH"):
+                ok = asyncio.run(
+                    client._download(cache / "catalog.json", cache / "aliases.json")
+                )
+            self.assertTrue(ok)
+            # 主目录与别名两次抓取都必须带上 client.proxy_url
+            self.assertEqual(len(session.calls), 2)
+            for url, proxy in session.calls:
+                self.assertEqual(proxy, "http://127.0.0.1:7890")
+            self.assertEqual((cache / "catalog.json").read_bytes(), b'{"items": []}')
+            self.assertEqual(
+                (cache / "aliases.json").read_bytes(), b'{"entries": []}'
+            )
 
 
 class DionathaDiskLoadTests(unittest.TestCase):
@@ -159,6 +210,29 @@ class DionathaDiskLoadTests(unittest.TestCase):
             os.utime(stale, (old, old))
             client = _BareClient.make(cache)
             self.assertFalse(asyncio.run(client._try_load_dionatha_disk()))
+
+    def test_corrupt_json_returns_false(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            self._write_collections(cache)
+            (cache / "dionatha_weapons.json").write_text(
+                "{not json", encoding="utf-8"
+            )
+            client = _BareClient.make(cache)
+            self.assertFalse(asyncio.run(client._try_load_dionatha_disk()))
+            self.assertEqual(client.dionatha_count, 0)
+
+    def test_non_object_top_level_returns_false(self) -> None:
+        # 合法 JSON 但顶层非对象（如 [1,2,3]）：不该抛 AttributeError 逃逸
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            self._write_collections(cache)
+            (cache / "dionatha_weapons.json").write_text(
+                "[1, 2, 3]", encoding="utf-8"
+            )
+            client = _BareClient.make(cache)
+            self.assertFalse(asyncio.run(client._try_load_dionatha_disk()))
+            self.assertEqual(client.dionatha_count, 0)
 
 
 if __name__ == "__main__":

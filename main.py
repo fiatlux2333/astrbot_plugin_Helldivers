@@ -1310,6 +1310,8 @@ class HelldiversPlugin(Star):
                 parts.append(detail)
             else:
                 parts.append("目录未下载")
+                if arsenal.dionatha_count:
+                    parts.append(f"补充 {arsenal.dionatha_count} 条")
             if enemies_mtime > 0:
                 parts.append(
                     f"敌人表 {humanize_age(now - enemies_mtime)}"
