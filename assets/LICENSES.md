@@ -1,13 +1,13 @@
 # Visual asset provenance and licensing
 
-Unless noted below, SVG and PNG files in this directory are original fan-art-like geometric illustrations created specifically for `astrbot_plugin_Helldivers` in July 2026.
+Unless noted below, PNG files in this directory are original fan-art-like geometric illustrations created specifically for `astrbot_plugin_Helldivers` in July 2026.
 
 ## Provenance
 
 - The artwork was constructed from original vector primitives: polygons, ellipses, lines, rings, stars, shields, and abstract mechanical or biological silhouettes.
 - Unless noted below, no Helldivers 2 game screenshot, Galactic War Web (GWW) screenshot, Discord/Steam image, extracted game texture, official logo file, or traced third-party artwork was used.
 - The designs use broad fictional concepts and color associations to make Super Earth, the Democracy Space Station (DSS), Automatons, Terminids, Illuminate, defense operations, major orders, and DSS tactical actions recognizable in plugin interfaces.
-- Every original runtime PNG was rendered locally from the corresponding SVG design and retains an alpha channel. Pillow is the only runtime image dependency; the SVG files are editable source masters.
+- Every original runtime PNG was originally rendered locally from an SVG design and retains its alpha channel; the SVG source masters were removed from the repository in August 2026 (the repository is PNG-only). Pillow is the only runtime image dependency.
 - `global_events/super_earth_flag.*` is an original stylized flag illustration and is not a copy of an in-game or promotional image.
 - `tactical/eagle_storm.*`, `tactical/orbital_blockade.*`, and `tactical/heavy_ordnance.*` are user-provided DSS tactical icons. Their SVG source credits Dogo314; the bundled PNGs are direct local rasterizations of those sources.
 - `user/dss.png` is the user-provided DSS reference image used by the DSS report renderer.
@@ -27,16 +27,16 @@ Helldivers and related names and fictional concepts are trademarks or intellectu
 
 ## Asset inventory
 
-- `emblems/super_earth.svg` and `.png`
-- `emblems/dss.svg` and `.png`
-- `emblems/automaton.svg` and `.png`
-- `emblems/terminids.svg` and `.png`
-- `emblems/illuminate.svg` and `.png`
-- `emblems/defense.svg` and `.png`
-- `emblems/major_order.svg` and `.png`
-- `dss/dss_wireframe.svg` and `.png`
-- `tactical/eagle_storm.svg` and `.png`
-- `tactical/orbital_blockade.svg` and `.png`
-- `tactical/heavy_ordnance.svg` and `.png`
-- `tactical/orbital_napalm.svg` and `.png`
-- `global_events/super_earth_flag.svg` and `.png`
+- `emblems/super_earth.png`
+- `emblems/dss.png`
+- `emblems/automaton.png`
+- `emblems/terminids.png`
+- `emblems/illuminate.png`
+- `emblems/defense.png`
+- `emblems/major_order.png`
+- `dss/dss_wireframe.png`
+- `tactical/eagle_storm.png`
+- `tactical/orbital_blockade.png`
+- `tactical/heavy_ordnance.png`
+- `tactical/orbital_napalm.png`
+- `global_events/super_earth_flag.png`
