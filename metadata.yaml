@@ -17,7 +17,7 @@ desc: |
   - Companion 新闻订阅推送
   - B 站银河快报监听推送
   - 数据源自诊断（/hd2ping）
-version: 1.10.1
+version: 1.10.2
 author: 牡蛎
 repo: https://github.com/fiatlux2333/astrbot_plugin_Helldivers
 astrbot_version: ">=4.16,<5"
