@@ -113,10 +113,10 @@
     "steam.hero": {
       "user": {
         "path": "steam_hero.png",
-        "sha256": "533cdf22624fda003048aa3657d715849a0773c4d5a295a8fb26d0c58965d8a7"
+        "sha256": "23aded699fb59ffdcff06accbdc5cae199322c4abd61da341dafa1e855e79bbe"
       },
-      "attribution": "Helldivers 2 'Devoid of Liberty' official key art (store banner, via helldivers.wiki.gg)",
-      "source_url": "https://helldivers.wiki.gg/images/Helldivers_2_Devoid_of_Liberty_Key_Art_Store_Banner.png",
+      "attribution": "Helldivers 2 'Scope of Authority' official key art (warbond banner, via helldivers.wiki.gg)",
+      "source_url": "https://helldivers.wiki.gg/images/Scope_of_Authority_Premium_Warbond_Banner.png",
       "license": "Arrowhead Game Studios promotional artwork; bundled as user-provided current-warbond hero",
       "original_sha1": null,
       "media_type": "image/png"

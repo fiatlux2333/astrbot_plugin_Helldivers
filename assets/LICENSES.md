@@ -13,7 +13,7 @@ Unless noted below, SVG and PNG files in this directory are original fan-art-lik
 - `user/dss.png` is the user-provided DSS reference image used by the DSS report renderer.
 - `user/super_earth_flag.png` is the user-provided Super Earth flag reference used for major-order and global-event artwork.
 - `user/*_template.png` files are user-provided visual references used as darkened cockpit backplates beneath dynamic report data.
-- `user/steam_hero.png` is the official Helldivers 2 "Devoid of Liberty" key art (store banner, downscaled crop, obtained via helldivers.wiki.gg). © Arrowhead Game Studios; bundled as the /steam card hero for the current warbond. Replace this file (and its manifest sha256) when the warbond rotates.
+- `user/steam_hero.png` is the official Helldivers 2 "Scope of Authority" key art (warbond banner, center crop to 1976×630, obtained via helldivers.wiki.gg). © Arrowhead Game Studios; bundled as the /steam card hero for the current warbond. Replace this file (and its manifest sha256) when the warbond rotates.
 
 ## License
 
