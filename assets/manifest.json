@@ -91,7 +91,7 @@
     "map.reference": {
       "user": {
         "path": "map.png",
-        "sha256": "da123161206c83a2ee98224f51ff9d16280f6a2579a45aa95bcf2daf7ed186d1"
+        "sha256": "7fb2379a95e02911b18458c05d76a71fc8eba7e7c17670c16787b818e2f5251e"
       },
       "attribution": "User-provided reference map",
       "source_url": null,
