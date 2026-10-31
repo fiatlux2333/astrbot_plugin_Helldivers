@@ -308,9 +308,9 @@ class BilibiliMonitorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(latest.dynamic_id, "6")
 
             self.assertEqual(await monitor.check_once(), 0)
+            self.assertTrue(monitor.subscribe("aiocqhttp:GroupMessage:123"))
             self.assertEqual(await monitor.check_once(), 1)
             self.assertEqual(sent, ["4"])
-            self.assertTrue(monitor.subscribe("aiocqhttp:GroupMessage:123"))
             self.assertFalse(monitor.subscribe("aiocqhttp:GroupMessage:123"))
 
             restored = BilibiliMonitor(

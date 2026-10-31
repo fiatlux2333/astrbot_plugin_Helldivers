@@ -14,7 +14,7 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Callable, Final
 
 import aiohttp
 
@@ -70,6 +70,7 @@ ENEMIES_API: Final[str] = (
     "&fields=title,health,faction,size,class,damage&limit=500&format=json"
 )
 REFRESH_INTERVAL: Final[int] = 24 * 3600
+CATALOG_RETRY_BACKOFF: Final[int] = 15 * 60
 # 下载体积上限：目录数据约 500KB，敌人/部位数据远小于此；16MB 上限只防
 # 异常镜像返回超大响应拖垮进程内存。
 MAX_DOWNLOAD_BYTES: Final[int] = 16 * 1024 * 1024
@@ -405,6 +406,7 @@ class ArsenalClient:
         self._index: dict[str, dict[str, Any]] = {}
         self._data_version: str = ""
         self._loaded_at: float = 0.0
+        self._refresh_retry_at: float = 0.0
         self._lock = asyncio.Lock()
         self._enemies_lock = asyncio.Lock()
         self._enemies_failed_at: float = 0.0
@@ -443,17 +445,65 @@ class ArsenalClient:
                     return True
             catalog_path = self.cache_dir / "catalog.json"
             aliases_path = self.cache_dir / "aliases.json"
-            stale = force or not catalog_path.is_file()
-            if not stale and time.time() - catalog_path.stat().st_mtime > REFRESH_INTERVAL:
-                stale = True
+            if not force and time.monotonic() < self._refresh_retry_at:
+                return bool(self._items) or self._load_from(
+                    catalog_path, aliases_path, allow_missing_aliases=True
+                )
+            cached = self._load_from(catalog_path, aliases_path)
+            stale = force or not cached
+            if cached and not stale:
+                try:
+                    stale = time.time() - catalog_path.stat().st_mtime > REFRESH_INTERVAL
+                except OSError:
+                    stale = True
             if stale:
                 ok = await self._download(catalog_path, aliases_path)
-                if not ok and not catalog_path.is_file():
-                    return False  # 下载失败且无本地缓存
-            if not self._load_from(catalog_path, aliases_path):
-                return False
-            self._loaded_at = time.time()
-            return True
+                if ok and self._load_from(catalog_path, aliases_path):
+                    self._loaded_at = time.time()
+                    self._refresh_retry_at = 0.0
+                    return True
+                # A failed refresh must not invalidate usable last-good data.
+                self._refresh_retry_at = time.monotonic() + CATALOG_RETRY_BACKOFF
+                return bool(self._items) or self._load_from(
+                    catalog_path, aliases_path, allow_missing_aliases=True
+                )
+            if cached:
+                self._loaded_at = time.time()
+            return cached
+
+    @staticmethod
+    def _validate_catalog(body: bytes | str) -> dict[str, Any]:
+        raw = json.loads(body)
+        if not isinstance(raw, dict):
+            raise ValueError("catalog must be an object")
+        items = raw.get("items")
+        if (
+            not isinstance(items, list)
+            or not items
+            or any(
+                not isinstance(item, dict)
+                or not isinstance(item.get("id"), str)
+                or not item["id"].strip()
+                or not isinstance(item.get("alternateNames", []), (list, type(None)))
+                for item in items
+            )
+        ):
+            raise ValueError("catalog must contain valid equipment items")
+        if not isinstance(raw.get("meta", {}), (dict, type(None))):
+            raise ValueError("catalog meta must be an object")
+        return raw
+
+    @staticmethod
+    def _validate_aliases(body: bytes | str) -> dict[str, Any]:
+        raw = json.loads(body)
+        if not isinstance(raw, dict) or not isinstance(raw.get("entries"), list):
+            raise ValueError("aliases must contain an entries list")
+        for entry in raw["entries"]:
+            if not isinstance(entry, dict) or not isinstance(
+                entry.get("aliases", []), (list, type(None))
+            ):
+                raise ValueError("invalid alias entry")
+        return raw
 
     async def _download(
         self, catalog_path: Path, aliases_path: Path
@@ -465,14 +515,21 @@ class ArsenalClient:
                 timeout=timeout,
                 trust_env=False,
             ) as session:
-                for urls, path in (
-                    (RAW_URLS, catalog_path),
-                    (ALIAS_URLS, aliases_path),
+                downloads: list[tuple[Path, bytes]] = []
+                for urls, path, validator in (
+                    (RAW_URLS, catalog_path, self._validate_catalog),
+                    (ALIAS_URLS, aliases_path, self._validate_aliases),
                 ):
-                    body = await self._fetch_any(session, urls, proxy=self.proxy_url)
+                    body = await self._fetch_any(
+                        session, urls, proxy=self.proxy_url, validator=validator
+                    )
                     if body is None:
                         HEALTH.record_fail("hd2tool", detail="镜像全部失败")
                         return False
+                    validator(body)
+                    downloads.append((path, body))
+                # Validate both resources before replacing either last-good file.
+                for path, body in downloads:
                     tmp = path.with_suffix(".tmp")
                     tmp.write_bytes(body)
                     tmp.replace(path)
@@ -512,6 +569,7 @@ class ArsenalClient:
         urls: tuple[str, ...],
         *,
         proxy: str | None = None,
+        validator: Callable[[bytes], Any] | None = None,
     ) -> bytes | None:
         """依次尝试多个镜像 URL，返回首个成功的响应体。
 
@@ -526,7 +584,10 @@ class ArsenalClient:
                             f"[HD2] arsenal download HTTP {resp.status}: {url}"
                         )
                         continue
-                    return await ArsenalClient._read_capped(resp)
+                    body = await ArsenalClient._read_capped(resp)
+                    if validator is not None:
+                        validator(body)
+                    return body
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -896,23 +957,23 @@ class ArsenalClient:
             self.ensure_dionatha(), name="hd2-dionatha-sync"
         )
 
-    def _load_from(self, catalog_path: Path, aliases_path: Path) -> bool:
+    def _load_from(
+        self, catalog_path: Path, aliases_path: Path, *, allow_missing_aliases: bool = False
+    ) -> bool:
         try:
-            raw = json.loads(catalog_path.read_text(encoding="utf-8"))
+            raw = self._validate_catalog(catalog_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             logger.warning(f"[HD2] arsenal catalog unreadable: {exc}")
             return False
-        items = raw.get("items")
-        if not isinstance(items, list) or not items:
-            return False
-        self._items = [i for i in items if isinstance(i, dict)]
+        try:
+            alias_raw = self._validate_aliases(aliases_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            if not allow_missing_aliases:
+                return False
+            alias_raw = {"entries": []}
+        self._items = raw["items"]
         meta = raw.get("meta") or {}
         self._data_version = str(meta.get("dataVersion") or "")
-
-        try:
-            alias_raw = json.loads(aliases_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            alias_raw = {}
         self._aliases = {}
         for entry in (alias_raw.get("entries") or []) if isinstance(alias_raw, dict) else []:
             if isinstance(entry, dict) and entry.get("equipmentId"):

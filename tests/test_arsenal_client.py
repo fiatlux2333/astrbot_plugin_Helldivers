@@ -144,7 +144,7 @@ class DownloadProxyTests(unittest.TestCase):
             cache = Path(tmp)
             session = _FakeSession(
                 [
-                    _FakeResp(200, b'{"items": []}'),
+                    _FakeResp(200, b'{"items": [{"id": "test"}]}'),
                     _FakeResp(200, b'{"entries": []}'),
                 ]
             )
@@ -163,10 +163,176 @@ class DownloadProxyTests(unittest.TestCase):
             self.assertEqual(len(session.calls), 2)
             for url, proxy in session.calls:
                 self.assertEqual(proxy, "http://127.0.0.1:7890")
-            self.assertEqual((cache / "catalog.json").read_bytes(), b'{"items": []}')
+            self.assertEqual((cache / "catalog.json").read_bytes(), b'{"items": [{"id": "test"}]}')
             self.assertEqual(
                 (cache / "aliases.json").read_bytes(), b'{"entries": []}'
             )
+
+
+class CatalogValidationTests(unittest.IsolatedAsyncioTestCase):
+    CATALOG = b'{"items": [{"id": "good", "nameEn": "Good item"}]}'
+    ALIASES = b'{"entries": []}'
+
+    def make_client(self, root):
+        client = _BareClient.make(root)
+        client._lock = asyncio.Lock()
+        client._loaded_at = 0
+        client._refresh_retry_at = 0
+        client._maybe_start_dionatha = mock.Mock()
+        return client
+
+    async def test_invalid_http_200_falls_through_to_valid_mirror(self):
+        session = _FakeSession([
+            _FakeResp(200, b"<html>gateway error</html>"),
+            _FakeResp(200, self.CATALOG),
+        ])
+        body = await ArsenalClient._fetch_any(
+            session, ("bad", "good"), validator=ArsenalClient._validate_catalog
+        )
+        self.assertEqual(body, self.CATALOG)
+        self.assertEqual(len(session.calls), 2)
+
+    async def test_invalid_alias_download_does_not_replace_good_catalog(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            catalog, aliases = root / "catalog.json", root / "aliases.json"
+            catalog.write_bytes(self.CATALOG)
+            aliases.write_bytes(self.ALIASES)
+            client = self.make_client(root)
+            session = _FakeSession([
+                _FakeResp(200, b'{"items": [{"id": "new"}]}'),
+                _FakeResp(200, b"<html>not aliases</html>"),
+            ])
+            with mock.patch.object(arsenal_module, "RAW_URLS", ("catalog",)), \
+                 mock.patch.object(arsenal_module, "ALIAS_URLS", ("aliases",)), \
+                 mock.patch.object(arsenal_module.aiohttp, "ClientSession",
+                                   lambda **_: _SessionCtx(session)):
+                self.assertFalse(await client._download(catalog, aliases))
+            self.assertEqual(catalog.read_bytes(), self.CATALOG)
+            self.assertEqual(aliases.read_bytes(), self.ALIASES)
+
+    async def test_fresh_but_invalid_disk_cache_is_repaired_immediately(self):
+        for bad in (b"<html>bad</html>", b"[]", b'{"items": []}',
+                    b'{"items": [3]}', b'{"items": [{"id": "x"}], "meta": 3}'):
+            with self.subTest(body=bad), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                catalog, aliases = root / "catalog.json", root / "aliases.json"
+                catalog.write_bytes(bad)
+                aliases.write_bytes(self.ALIASES)
+                client = self.make_client(root)
+
+                async def repair(*_):
+                    catalog.write_bytes(self.CATALOG)
+                    aliases.write_bytes(self.ALIASES)
+                    return True
+
+                client._download = mock.AsyncMock(side_effect=repair)
+                self.assertTrue(await client.ensure_loaded())
+                client._download.assert_awaited_once()
+                self.assertEqual(client.search("good")[0]["id"], "good")
+
+    async def test_failed_forced_refresh_preserves_last_good_disk_and_memory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            catalog, aliases = root / "catalog.json", root / "aliases.json"
+            catalog.write_bytes(self.CATALOG)
+            aliases.write_bytes(self.ALIASES)
+            client = self.make_client(root)
+            client._download = mock.AsyncMock(return_value=False)
+            self.assertTrue(await client.ensure_loaded(force=True))
+            self.assertEqual(client.search("good")[0]["id"], "good")
+            self.assertEqual(catalog.read_bytes(), self.CATALOG)
+            # Corrupt disk must not destroy already loaded usable data either.
+            catalog.write_bytes(b"<html>bad</html>")
+            self.assertTrue(await client.ensure_loaded(force=True))
+            self.assertEqual(client.search("good")[0]["id"], "good")
+
+    async def test_invalid_alias_disk_cache_triggers_repair_without_mutating_items(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            catalog, aliases = root / "catalog.json", root / "aliases.json"
+            catalog.write_bytes(self.CATALOG)
+            aliases.write_bytes(self.ALIASES)
+            client = self.make_client(root)
+            self.assertTrue(client._load_from(catalog, aliases))
+            catalog.write_bytes(b'{"items": [{"id": "replacement"}]}')
+            aliases.write_bytes(b'{"entries": [{"aliases": 4}]}')
+            self.assertFalse(client._load_from(catalog, aliases))
+            self.assertEqual(client._items[0]["id"], "good")
+            client._download = mock.AsyncMock(return_value=False)
+            self.assertTrue(await client.ensure_loaded(force=True))
+            client._download.assert_awaited_once()
+
+    async def test_missing_aliases_and_failed_download_still_allow_catalog_search(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "catalog.json").write_bytes(self.CATALOG)
+            client = self.make_client(root)
+            client._download = mock.AsyncMock(return_value=False)
+            self.assertTrue(await client.ensure_loaded())
+            client._download.assert_awaited_once()
+            self.assertEqual(client.search("good")[0]["id"], "good")
+            self.assertEqual(client._loaded_at, 0)
+
+    async def test_failed_refresh_backs_off_with_usable_stale_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            catalog = root / "catalog.json"
+            catalog.write_bytes(self.CATALOG)
+            (root / "aliases.json").write_bytes(self.ALIASES)
+            old = time.time() - REFRESH_INTERVAL - 10
+            os.utime(catalog, (old, old))
+            client = self.make_client(root)
+            client._download = mock.AsyncMock(return_value=False)
+            with mock.patch.object(arsenal_module.time, "monotonic", return_value=1000) as clock:
+                self.assertTrue(await client.ensure_loaded())
+                self.assertTrue(await client.ensure_loaded())
+                client._download.assert_awaited_once()
+                self.assertEqual(client.search("good")[0]["id"], "good")
+                # Expiring the retry window, not a successful refresh TTL,
+                # makes the next query try the mirrors again.
+                clock.return_value = 1000 + arsenal_module.CATALOG_RETRY_BACKOFF + 1
+                self.assertTrue(await client.ensure_loaded())
+                self.assertEqual(client._download.await_count, 2)
+
+    async def test_failed_initial_download_backs_off_without_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self.make_client(Path(tmp))
+            client._download = mock.AsyncMock(return_value=False)
+            self.assertFalse(await client.ensure_loaded())
+            self.assertFalse(await client.ensure_loaded())
+            client._download.assert_awaited_once()
+
+    async def test_forced_refresh_bypasses_backoff_and_success_resets_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            client = self.make_client(root)
+            client._download = mock.AsyncMock(return_value=False)
+            self.assertFalse(await client.ensure_loaded())
+            self.assertGreater(client._refresh_retry_at, 0)
+
+            async def repair(*_):
+                (root / "catalog.json").write_bytes(self.CATALOG)
+                (root / "aliases.json").write_bytes(self.ALIASES)
+                return True
+
+            client._download.side_effect = repair
+            self.assertTrue(await client.ensure_loaded(force=True))
+            self.assertEqual(client._download.await_count, 2)
+            self.assertEqual(client._refresh_retry_at, 0)
+            self.assertTrue(await client.ensure_loaded())
+            self.assertEqual(client._download.await_count, 2)
+
+    async def test_missing_aliases_fallback_also_honors_retry_window(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "catalog.json").write_bytes(self.CATALOG)
+            client = self.make_client(root)
+            client._download = mock.AsyncMock(return_value=False)
+            self.assertTrue(await client.ensure_loaded())
+            self.assertTrue(await client.ensure_loaded())
+            client._download.assert_awaited_once()
+            self.assertEqual(client.search("good")[0]["id"], "good")
 
 
 class DionathaDiskLoadTests(unittest.TestCase):

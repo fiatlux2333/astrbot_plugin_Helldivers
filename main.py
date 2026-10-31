@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import inspect
 import time
 from collections.abc import AsyncGenerator, Callable
@@ -39,7 +38,7 @@ from .clients.bilibili_monitor import (
 from .core.cache import CacheService, get_plugin_data_dir
 from .core.campaign_trends import CampaignTrendStore
 from .renderers.card_renderer import CardRenderer
-from .clients.companion_news_monitor import CompanionNewsMonitor
+from .clients.companion_news_monitor import CompanionNewsMonitor, news_fingerprint
 from .clients.companion_screenshot import (
     CompanionConfigurationError,
     CompanionPlaywrightClient,
@@ -638,7 +637,7 @@ class HelldiversPlugin(Star):
         absorbed in the background instead of blocking the user.
         """
 
-        if self._companion_warmup_task is not None:
+        if self._companion_warmup_task is not None and not self._companion_warmup_task.done():
             return
         if self.companion_playwright is None:
             return
@@ -649,19 +648,7 @@ class HelldiversPlugin(Star):
         )
         logger.info("[HD2] Companion 截图后台预热已启动")
 
-    async def _companion_warmup_loop(self) -> None:
-        """Periodically pre-capture Companion pages in the background.
-
-        Each capture follows the exact same path as a user request (page load
-        → DOM text extraction → translate_callback → screenshot → cache file).
-        Translation is not time-pressured here: the foreground budget and
-        batch timeouts still apply, but failures are swallowed — the disk
-        translation cache gradually fills with fragments, and ``stale-while-
-        revalidate`` means a partially-warmed cache still serves a usable
-        screenshot on the next user request.
-        """
-
-        interval = max(60, int(self._cfg("companion_warmup_interval", 300) or 300))
+    def _companion_warmup_targets(self) -> list[CompanionTarget]:
         kinds_raw = str(
             self._cfg("companion_warmup_kinds", "news_latest,station")
             or "news_latest,station"
@@ -675,13 +662,27 @@ class HelldiversPlugin(Star):
         for token in kinds_raw.split(","):
             kind = token.strip().casefold()
             factory = kind_map.get(kind)
-            if factory is not None:
+            if factory is not None and all(target.kind != kind for target in targets):
                 targets.append(factory())
+        if self._companion_news_push_enabled and all(
+            target.kind != "news_latest" for target in targets
+        ):
+            targets.insert(0, companion_latest_news_target())
+        return targets
+
+    async def _companion_warmup_loop(self) -> None:
+        """Refresh screenshots and retry queued deliveries independently."""
+        interval = max(60, int(self._cfg("companion_warmup_interval", 300) or 300))
+        targets = self._companion_warmup_targets()
         if not targets:
             return
         # Give the rest of the plugin a moment to settle before the first run.
         await asyncio.sleep(15)
         while True:
+            try:
+                await self._deliver_pending_companion_news()
+            except Exception as exc:
+                logger.warning("[HD2] Companion 新闻重试失败: %s", exc)
             for target in targets:
                 try:
                     # When news push is enabled, force a fresh capture for
@@ -721,10 +722,8 @@ class HelldiversPlugin(Star):
 
         Called from the warmup loop after each ``news_latest`` capture with
         the screenshot path already in hand — no second capture needed.
-        The fingerprint is only committed after a successful push (or an
-        intentional skip), so a transient delivery failure doesn't
-        permanently consume a news update — the next warmup cycle
-        re-detects and re-pushes.
+        Each update is durably queued with its image and recipient list before
+        advancing the fingerprint. Failed recipients are retried separately.
         """
         monitor = self.companion_news_monitor
         if monitor is None:
@@ -735,7 +734,7 @@ class HelldiversPlugin(Star):
         texts = client.capture_texts("news_latest")
         if not texts:
             return
-        fingerprint = hashlib.sha1("\n".join(texts).encode("utf-8")).hexdigest()
+        fingerprint = news_fingerprint(texts)
         if not monitor.check_fingerprint(fingerprint):
             return
         if not monitor.sessions:
@@ -759,15 +758,31 @@ class HelldiversPlugin(Star):
                 "本轮跳过推送，下一轮重试"
             )
             return
-        delivered = await self._push_companion_news(path, list(monitor.sessions))
-        if delivered > 0:
-            monitor.commit_fingerprint(fingerprint)
-        else:
-            logger.warning(
-                "[HD2] Companion 新闻推送全部失败（delivered=0/%d），"
-                "不提交指纹，下一轮预热将重试推送",
-                len(monitor.sessions),
-            )
+        await monitor.enqueue(fingerprint, path)
+        await self._deliver_pending_companion_news()
+
+    async def _deliver_pending_companion_news(self) -> None:
+        monitor = self.companion_news_monitor
+        if monitor is None or not self._companion_news_push_enabled:
+            return
+        monitor.prune_pending()
+        for fingerprint, sessions in list(monitor.pending.items()):
+            for session in list(sessions):
+                if session not in sessions:
+                    continue
+                if session not in monitor.sessions:
+                    monitor.mark_delivered(fingerprint, session)
+                    continue
+                try:
+                    delivered = await self._push_companion_news(
+                        monitor.pending_image(fingerprint), [session]
+                    )
+                except Exception as exc:
+                    logger.warning("[HD2] Companion news retry failed: %s", exc)
+                    continue
+                if delivered:
+                    monitor.mark_delivered(fingerprint, session)
+            monitor.finish_pending(fingerprint)
 
     async def _push_companion_news(
         self, path: Path, sessions: list[str]
@@ -864,7 +879,7 @@ class HelldiversPlugin(Star):
                 "[HD2] matched Bilibili dynamic %s, but no QQ group subscribed",
                 post.dynamic_id,
             )
-            return
+            return 0
         text = post.text or "（该动态没有文字内容）"
         # 预读图片字节：AstrBot 容器与 NapCat 宿主机分离部署时，
         # file:/// 路径跨进程不可读，直接内嵌 base64 绕过文件系统。
@@ -1168,6 +1183,15 @@ class HelldiversPlugin(Star):
                 "请在配置中开启 companion_warmup_enabled。"
             )
             return
+        if self.companion_playwright is None:
+            yield event.plain_result(
+                "❌ Playwright 截图客户端未就绪，请检查 Chromium 安装和插件日志后重载。"
+            )
+            return
+        self._start_companion_warmup()
+        if self._companion_warmup_task is None or self._companion_warmup_task.done():
+            yield event.plain_result("❌ 新闻检测任务未运行，请检查插件日志后重载。")
+            return
         origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
         if not origin:
             yield event.plain_result("❌ 无法获取当前群会话标识，请检查适配器。")
@@ -1400,6 +1424,15 @@ class HelldiversPlugin(Star):
     @_command_handler
     async def cmd_dss(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
         """截图 Companion DSS 页面并附中文情报。"""
+        if self.companion_backend == "local":
+            try:
+                paths = await self._svc().get_dss_image()
+            except Exception as exc:
+                logger.exception("[HD2] /dss local render failed: %s", exc)
+                paths = []
+            async for result in self._yield_images(event, paths):
+                yield result
+            return
         target = companion_dss_target()
         try:
             path = await self._capture_companion_page(target)
@@ -1529,6 +1562,19 @@ class HelldiversPlugin(Star):
         except Exception as e:
             logger.exception(f"[HD2] /planet resolve error: {e}")
             yield event.plain_result("❌ 解析星球失败，请稍后重试。")
+            return
+
+        if self.companion_backend == "local":
+            try:
+                error, paths = await self._svc().get_planet_image(fallback_query)
+            except Exception as exc:
+                logger.exception("[HD2] /planet local render failed: %s", exc)
+                error, paths = "❌ 获取星球数据卡片失败，请稍后重试。", []
+            if error:
+                yield event.plain_result(error)
+            else:
+                async for result in self._yield_images(event, paths):
+                    yield result
             return
 
         try:

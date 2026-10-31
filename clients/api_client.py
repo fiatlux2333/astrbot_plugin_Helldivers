@@ -6,9 +6,11 @@ import asyncio
 import random
 import re
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Optional
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import aiohttp
 from astrbot.api import logger
@@ -67,7 +69,7 @@ class HD2Client:
     async def get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
-                headers=self.headers,
+                headers=self._public_headers(),
                 timeout=self.timeout,
             )
         return self._session
@@ -82,15 +84,83 @@ class HD2Client:
             return path
         return f"{self.base_url}{path if path.startswith('/') else '/' + path}"
 
-    def _headers_for_url(self, url: str) -> dict[str, str]:
-        target = urlsplit(url)
-        base = urlsplit(self.base_url)
-        if target.hostname and target.hostname.lower() == (base.hostname or "").lower():
-            return dict(self.headers)
+    def _public_headers(self) -> dict[str, str]:
         return {
             "User-Agent": self.headers["User-Agent"],
-            "Accept": "application/json",
+            "Accept": self.headers["Accept"],
         }
+
+    @staticmethod
+    def _origin(url: str) -> tuple[str, str, int | None]:
+        parsed = urlsplit(url)
+        port = parsed.port
+        if port is None:
+            port = {"http": 80, "https": 443}.get(parsed.scheme.lower())
+        return (
+            parsed.scheme.lower(),
+            (parsed.hostname or "").lower(),
+            port,
+        )
+
+    def _headers_for_url(self, url: str) -> dict[str, str]:
+        if self._origin(url) == self._origin(self.base_url):
+            return dict(self.headers)
+        return self._public_headers()
+
+    @asynccontextmanager
+    async def _request_with_redirects(
+        self, session: aiohttp.ClientSession, method: str, url: str,
+        *, extra_headers: dict[str, str] | None = None, **kwargs: Any,
+    ) -> AsyncIterator[aiohttp.ClientResponse]:
+        initial_origin = self._origin(url)
+        timeout = kwargs.get("timeout", self.timeout)
+        loop = asyncio.get_running_loop()
+        deadline = (
+            loop.time() + timeout.total
+            if timeout.total is not None and timeout.total > 0 else None
+        )
+        for hop in range(11):
+            if deadline is not None:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError("API redirect chain timed out")
+                # Preserve connect/read limits while sharing the total budget.
+                kwargs["timeout"] = aiohttp.ClientTimeout(
+                    total=remaining,
+                    connect=timeout.connect,
+                    sock_read=timeout.sock_read,
+                    sock_connect=timeout.sock_connect,
+                    ceil_threshold=timeout.ceil_threshold,
+                )
+            headers = self._headers_for_url(url)
+            if extra_headers and self._origin(url) == initial_origin:
+                headers.update(extra_headers)
+            if self._origin(url) != self._origin(self.base_url):
+                headers = {
+                    k: v for k, v in headers.items()
+                    if k.lower() not in {"x-super-client", "x-super-contact"}
+                }
+            async with session.request(
+                method, url, headers=headers, allow_redirects=False, **kwargs
+            ) as response:
+                location = response.headers.get("Location")
+                if response.status not in {301, 302, 303, 307, 308} or not location:
+                    yield response
+                    return
+                if hop == 10:
+                    raise RuntimeError("too many API redirects")
+                target = urljoin(url, location)
+                if urlsplit(target).scheme.lower() not in {"http", "https"}:
+                    raise ValueError("unsupported API redirect scheme")
+                # Do not forward request bodies to a different origin.
+                if self._origin(target) != self._origin(url) and kwargs.get("json") is not None:
+                    raise ValueError("refusing cross-origin API body redirect")
+                if (response.status == 303 and method.upper() != "HEAD") or (
+                    response.status in {301, 302} and method.upper() == "POST"
+                ):
+                    method = "GET"
+                    kwargs.pop("json", None)
+                url = target
 
     async def _throttle(self) -> None:
         """全局限流：请求间隔 + 429 冷却。"""
@@ -139,10 +209,7 @@ class HD2Client:
         timeout: aiohttp.ClientTimeout | float | None = None,
     ) -> Any:
         url = self._url(path)
-        headers = self._headers_for_url(url)
         started = time.perf_counter()
-        if extra_headers:
-            headers.update(extra_headers)
         attempts = (
             self.retry_max_attempts
             if max_attempts is None
@@ -162,12 +229,13 @@ class HD2Client:
                 session = await self.get_session()
                 request_kwargs: dict[str, Any] = {
                     "json": json_body,
-                    "headers": headers,
                     "proxy": self.proxy_url,
                 }
                 if request_timeout is not None:
                     request_kwargs["timeout"] = request_timeout
-                async with session.request(method, url, **request_kwargs) as resp:
+                async with self._request_with_redirects(
+                    session, method, url, extra_headers=extra_headers, **request_kwargs
+                ) as resp:
                     if resp.status == 200:
                         data = await resp.json(content_type=None)
                         HEALTH.record_ok(

@@ -13,6 +13,12 @@ mkdir -p "$OUT_DIR"
 
 zip -r -X "$ZIP" . \
   -x ".git/*" \
+  -x ".venv/*" \
+  -x "venv/*" \
+  -x ".env" \
+  -x ".env.*" \
+  -x ".publish-*/*" \
+  -x ".publish-*" \
   -x ".gitignore" \
   -x "__pycache__/*" \
   -x "*/__pycache__/*" \

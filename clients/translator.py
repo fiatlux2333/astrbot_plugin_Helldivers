@@ -771,6 +771,7 @@ class TranslationCache:
         self.path = data_dir / "translations.json"
         self._data: dict[str, dict[str, Any]] = {}
         self._lock = asyncio.Lock()
+        self._flush_lock = asyncio.Lock()
         self.provider_fingerprint = provider_fingerprint
         self.fallback_ttl = max(60, int(fallback_ttl))
         # 写盘去抖：store 在热路径上每段调用一次，若每次都全量同步落盘，
@@ -815,18 +816,32 @@ class TranslationCache:
         if self._save_handle is not None:
             self._save_handle.cancel()
             self._save_handle = None
-        if not self._dirty:
-            return
-        async with self._lock:
-            if not self._dirty:
-                return
-            self._dirty = False
-            self._enforce_capacity()
-            payload = json.dumps(
-                self._data, ensure_ascii=False, separators=(",", ":")
-            )
-        # JSON 序列化在锁内完成后，磁盘 IO 放线程池，避免阻塞事件循环
-        await asyncio.to_thread(self._write_payload, payload)
+        # Hold through disk completion so an older snapshot cannot win a race.
+        async with self._flush_lock:
+            while self._dirty:
+                async with self._lock:
+                    self._enforce_capacity()
+                    payload = json.dumps(
+                        self._data, ensure_ascii=False, separators=(",", ":")
+                    )
+                    self._dirty = False
+                writer = asyncio.create_task(asyncio.to_thread(self._write_payload, payload))
+                cancelled = False
+                try:
+                    while not writer.done():
+                        try:
+                            await asyncio.shield(writer)
+                        except asyncio.CancelledError:
+                            # Cancelling to_thread does not stop its disk write.
+                            cancelled = True
+                    writer.result()
+                except Exception as exc:
+                    self._dirty = True
+                    logger.warning(f"[HD2] save translation cache failed: {exc}")
+                    if not cancelled:
+                        return
+                if cancelled:
+                    raise asyncio.CancelledError
 
     def _enforce_capacity(self) -> None:
         overflow = len(self._data) - self.MAX_ENTRIES
@@ -840,18 +855,18 @@ class TranslationCache:
             self._data.pop(key, None)
 
     def _write_payload(self, payload: str) -> None:
-        # 唯一临时名：并发 flush（去抖与关机交叠）不会互写同一个 .tmp
+        # Keep a unique staging file until the atomic replacement succeeds.
         tmp = self.path.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp")
         try:
             tmp.write_text(payload, encoding="utf-8")
             os.replace(tmp, self.path)
-        except Exception as e:
-            logger.warning(f"[HD2] save translation cache failed: {e}")
+        except Exception:
             try:
                 if tmp.exists():
                     tmp.unlink()
             except Exception:
                 pass
+            raise
 
     async def get(self, content_type: str, item_id: str) -> Optional[dict[str, Any]]:
         async with self._lock:

@@ -1,6 +1,6 @@
 # 绝地潜兵2情报助手 (astrbot_plugin_Helldivers)
 
-基于 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 的《绝地潜兵2》银河战争情报插件，当前版本 `v1.10.2`。
+基于 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 的《绝地潜兵2》银河战争情报插件，当前版本 `v1.10.3`。
 
 数据来源：Helldivers 2 Community API、Helldivers Companion、Steam News API、helldivers.wiki.gg。常规情报由 Pillow 渲染为中文卡片；`/hd2news`、`/dss`、`/planet`、`/companion` 通过 Playwright 截取 Companion 网页并做术语级中文翻译。内置双层缓存、请求限流重试、官方译名词表（569 条）预替换与 AI 翻译（内置接口或 OpenAI 兼容接口）；翻译提示词实质性改版时通过协议指纹（当前 v4）自动失效旧翻译缓存。
 
@@ -35,10 +35,21 @@
 
 - Companion 截图翻译降级顺序：全中文 → 最近翻译快照（2 小时内）→ 部分翻译 → 英文截图，翻译异常不会导致命令报错；后台每 5 分钟预热页面，正常请求直接返回缓存截图。
 - 群订阅（`/hd2news订阅`、`/银河快报订阅`）按动态/新闻 ID 持久化去重，首次订阅只记录基线，不补发历史内容；推送包含正文、图片与原动态出处。
+- 推送按群记录投递进度，部分群失败时只重试失败群，重载后继续处理待投递内容；Companion 新闻指纹忽略相对时间标签，并保存待投递截图。升级指纹算法后首次采集重新建立基线，不补发旧新闻。
+- 两类推送的待投递队列各保留最多 100 条、最长 7 天；Companion 待投递截图合计最多 128 MiB。超限时按入队时间丢弃最旧内容并记录警告，过期内容不再补发，订阅关系不受影响；重载时也会清理过期队列与无引用截图。
+- 开启 Companion 新闻推送后，后台会自动加入 `news_latest` 检测目标，即使 `companion_warmup_kinds` 只配置了其他页面；截图客户端未就绪时不会接受新订阅。
 - `/hd2data` 装备数据来自开源 HD2Tool（MIT），敌人数据来自 helldivers.wiki.gg，首次使用自动下载，24 小时检查更新；HD2Tool 未收录的新装备/新债券内容由 wiki.gg 补充目录（[dionatha API](https://helldivers-api.dionatha.com.br/)，每日同步，CC BY-NC-SA 4.0）兜底，卡片底部标注数据来源与版本。
 - `/planet` 支持中文名、编号、英文 slug 与 Companion 链接；仅允许访问 `helldiverscompanion.com` 的固定路由，无任意网页截图。
 
 ## 安装
+
+### 环境要求
+
+- AstrBot `>=4.16,<5`，Python `>=3.11`（使用 `asyncio.timeout`）。
+- Python 依赖：`aiohttp>=3.10.0`、`Pillow>=10.0.0`、`playwright>=1.50.0`。请在运行 AstrBot 的同一 Python 环境中安装；无需将 AstrBot 本体加入插件的 `requirements.txt`。
+- 默认使用 Playwright 截图。安装 Python 包不会自动安装 Chromium，仍需按下文安装浏览器及 Linux 系统库，并安装中文字体。
+- 无浏览器环境可将 `companion_render_backend` 设为 `local`，使用本地数据卡片；`/companion` 网页截图及 Companion 新闻订阅需要 Playwright。
+- 需要访问社区 API、Companion、Steam、Wiki 与装备数据镜像；网络受限时配置 `proxy_url`。B 站监听还需配置有效登录 Cookie，翻译密钥按所选翻译服务填写，均不要提交到仓库。
 
 ### 插件市场（推荐）
 
@@ -50,10 +61,10 @@
 cd AstrBot/data/plugins
 git clone https://github.com/fiatlux2333/astrbot_plugin_Helldivers
 cd astrbot_plugin_Helldivers
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
-### Chromium 系统库（截图功能必需）
+### Chromium 浏览器与系统库（截图功能必需）
 
 Playwright 的 Chromium 需要系统依赖库，缺失时报 `Host system is missing dependencies` 或截图超时：
 
@@ -61,13 +72,18 @@ Playwright 的 Chromium 需要系统依赖库，缺失时报 `Host system is mis
 # 需要 root
 python -m playwright install --with-deps chromium
 
-# 无 root 权限时手动安装
+# Debian / Ubuntu 手动安装系统库（仍需 root 或 sudo）
 apt update && apt install -y \
     libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 \
     libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
     libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 \
     libasound2 libatspi2.0-0
+
+# 已安装系统库后，以运行 AstrBot 的用户安装浏览器
+python -m playwright install chromium
 ```
+
+Windows / macOS 在 AstrBot 使用的 Python 环境中执行 `python -m playwright install chromium`。Linux 无管理员权限且缺少系统库时，需要管理员安装依赖，或使用 `local` 后端。
 
 AstrBot 在 Docker 容器（名为 `astrbot`）中时：
 
@@ -108,7 +124,7 @@ Windows / macOS 一般自带中文字体，无需安装。
 
 默认 `companion_render_backend=playwright`，在 AstrBot 容器内截图并翻译，无需额外服务。可选值：
 
-- `local`：不用浏览器，返回 Pillow 中文数据卡片。
+- `local`：`/hd2news`、`/dss`、`/planet` 不用浏览器，返回 Pillow 中文数据卡片；`/companion` 首页仍需网页截图后端。
 - `browserless`：远程截图服务，无法调用插件翻译器，仅关闭翻译时返回英文网页截图。AstrBot 在 Docker 中时：
 
 ```bash
@@ -230,7 +246,7 @@ Cookie 是登录凭据，不要发给他人或提交到仓库。若登录验证�
 5. `companion_screenshot_cache_ttl` 建议与 `companion_warmup_interval` 保持一致（默认均 300 秒）。
 6. AstrBot 4.26.x 热重载可能残留旧 handler 导致重复回复，插件已内置兼容包装器，完整重启可彻底清理。
 7. 官方译名词表在 `assets/glossary/*.json`，修改后需重载插件。
-8. 军需簿数据缓存在插件数据目录 `arsenal/`，删除该目录可强制重新下载；wiki.gg 下载失败时进入 15 分钟退避，期间装备查询不受影响。
+8. 军需簿数据缓存在插件数据目录 `arsenal/`，删除该目录后，下次允许下载时会重新获取。装备目录或 wiki.gg 下载失败时分别进入 15 分钟退避，期间优先使用已有数据，避免每次查询重复等待镜像超时。
 9. Pillow 或中文字体缺失时，图片可能无法生成或中文显示为方框。
 10. 银河快报转载保留原动态出处，请遵守原作者的转载要求。
 
