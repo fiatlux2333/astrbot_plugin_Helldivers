@@ -75,7 +75,8 @@ from .renderers.steam_renderer import SteamRenderer
 from .clients.translator import TranslationCache, TranslationService
 from .renderers.visual_assets import configure_asset_manifest
 from .renderers.warfront_renderer import WarfrontRenderer
-from .clients.wiki_client import WikiCache, WikiClient
+from .clients.jerry_wiki import DEFAULT_BASE, JerryWikiClient
+from .clients.jerry_map import JerryMapClient
 
 PLUGIN_DESC = (
     "Helldivers 2 银河战争图片情报：Dashboard、统计、DSS、星图、事件、Steam 与战线排行"
@@ -88,7 +89,7 @@ Helldivers 2 银河战争 {PLUGIN_VERSION}
 /dashboard            银河战争总览（实时数据）
 /hd2stats             银河战争详细统计（实时数据）
 /major_order          主要任务（同 /order）
-/map                  战争地图（阵营领土）
+/map                  中文星图截图（失败回退本地地图）
 /dss                  Companion 民主空间站图文
 /global_events        全球事件
 /hd2news              Companion 最新新闻
@@ -98,7 +99,7 @@ Helldivers 2 银河战争 {PLUGIN_VERSION}
 /planet <名称/编号>   星球详情
 /steam                Steam 新闻图片
 【文本】
-/wiki <关键词>        Helldivers Wiki（-f 查看全文）
+/wiki <关键词>        Jerry 中文资料（-f 查看详细内容）
 /hd2data <名称>       军需簿：武器/护甲/敌人
 /银河快报             立即获取最新一期银河快报
 /hd2ping              数据源自诊断（健康/缓存）
@@ -107,7 +108,7 @@ Helldivers 2 银河战争 {PLUGIN_VERSION}
 ━━━━━━━━━━━━━━━━━━━━
 阵营: Terminids / Automaton / Illuminate
      （终结族 / 机器人 / 光能者）
-数据: api.helldivers2.dev · wiki.gg · HD2Tool
+数据: api.helldivers2.dev · Jerry 中文资料站 · HD2Tool
 为了超级地球！🌍"""
 
 HDHELP_TEXT = f"""\
@@ -134,7 +135,7 @@ HDHELP_TEXT = f"""\
 
 【外部资讯】
 /steam                Steam 更新公告
-/wiki <关键词>        Wiki 查询（中文自动译名；加 -f 看全文）
+/wiki <关键词>        中文资料查询（直接检索；加 -f 看详细内容）
 /hd2data <名称>       军需簿：武器/护甲/敌人（俗称：电喷/泰坦）
 /银河快报             最新一期快报
 /银河快报订阅 / 退订   群推送开关
@@ -406,19 +407,13 @@ class HelldiversPlugin(Star):
         )
 
         enable_wiki = bool(self._cfg("enable_wiki", True))
-        wiki_client: WikiClient | None = None
+        wiki_client: JerryWikiClient | None = None
         if enable_wiki:
-            wiki_cache = WikiCache(
+            wiki_client = JerryWikiClient(
                 data_dir,
+                base_url=str(self._cfg("wiki_static_base", DEFAULT_BASE)),
                 page_ttl=int(self._cfg("wiki_cache_ttl", 21600) or 21600),
                 search_ttl=int(self._cfg("wiki_search_cache_ttl", 1800) or 1800),
-            )
-            wiki_client = WikiClient(
-                base_url=str(self._cfg("wiki_base", "https://helldivers.wiki.gg")),
-                api_path=str(self._cfg("wiki_api_path", "/api.php") or "/api.php"),
-                user_agent=str(
-                    self._cfg("api_user_agent", USER_AGENT)
-                ),
                 timeout=int(self._cfg("api_timeout", 30) or 30),
                 proxy_url=str(self._cfg("proxy_url", "") or ""),
                 search_limit=int(self._cfg("wiki_search_limit", 5) or 5),
@@ -426,10 +421,6 @@ class HelldiversPlugin(Star):
                 full_extract_chars=int(
                     self._cfg("wiki_full_extract_chars", 3000) or 3000
                 ),
-                prefer_hd2=bool(self._cfg("wiki_prefer_hd2", True)),
-                retry_max_attempts=int(self._cfg("retry_max_attempts", 3) or 3),
-                retry_base_delay=float(self._cfg("retry_base_delay", 2.0) or 2.0),
-                cache=wiki_cache,
             )
         manifest_path = str(self._cfg("asset_manifest_path", "") or "").strip()
         configure_asset_manifest(manifest_path or None)
@@ -490,8 +481,14 @@ class HelldiversPlugin(Star):
             enable_translation=enable_translation,
             wiki_client=wiki_client,
             enable_wiki=enable_wiki,
-            translate_wiki=bool(self._cfg("translate_wiki", True)),
+            translate_wiki=False,
             map_renderer=map_renderer,
+            map_screenshot=JerryMapClient(
+                data_dir / "jerry_maps",
+                cache_ttl=int(self._cfg("map_screenshot_cache_ttl", 300)),
+                timeout=float(self._cfg("map_screenshot_timeout", 45)),
+                proxy_url=str(self._cfg("proxy_url", "") or ""),
+            ) if bool(self._cfg("enable_map", True)) else None,
             enable_map=bool(self._cfg("enable_map", True)),
             card_renderer=card_renderer,
             dashboard_renderer=dashboard_renderer,
@@ -1380,9 +1377,9 @@ class HelldiversPlugin(Star):
     @filter.command("wiki", alias={"维基", "百科"})
     @_command_handler
     async def cmd_wiki(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
-        """查询 Helldivers Wiki，用法: /wiki <关键词> [-f 全文]"""
+        """查询 Jerry 静态中文资料，用法: /wiki <关键词> [-f 详细内容]"""
         args = _strip_cmd(event.message_str or "", {"wiki", "维基", "百科"})
-        # -f / --full 开关：返回全文而不是摘要
+        # -f / --full keeps the existing command syntax with a larger text budget.
         full = False
         if "-f" in args or "--full" in args:
             full = True

@@ -45,11 +45,9 @@ from .core.formatters import (
     format_stats_message,
     format_steam_message,
     format_warfront_message,
-    format_wiki_search_results,
-    format_wiki_summary,
 )
 from .renderers.global_event_renderer import GlobalEventRenderer
-from .core.glossary import contains_cjk, preapply_glossary, translate_query
+from .core.glossary import preapply_glossary
 from .core.i18n import known_planet_names, lookup_planet_name
 from .renderers.major_order_renderer import MajorOrderRenderer
 from .renderers.map_renderer import MapRenderer
@@ -62,7 +60,8 @@ from .core.text_utils import clean_game_text
 from .clients.translator import TranslationCache, TranslationService
 from .core.war_state import WarState, normalize_faction, planet_index, planet_name
 from .renderers.warfront_renderer import WarfrontRenderer
-from .clients.wiki_client import WikiClient
+from .clients.jerry_wiki import JerryWikiClient
+from .clients.jerry_map import JerryMapClient
 
 _COMPANION_STATIC_TRANSLATIONS = {
     "review message from super earth": "查阅来自超级地球的消息",
@@ -147,10 +146,11 @@ class HelldiversService:
         rotation_orders: int = 600,
         rotation_steam: int = 900,
         enable_translation: bool = True,
-        wiki_client: WikiClient | None = None,
+        wiki_client: JerryWikiClient | None = None,
         enable_wiki: bool = True,
         translate_wiki: bool = True,
         map_renderer: MapRenderer | None = None,
+        map_screenshot: JerryMapClient | None = None,
         enable_map: bool = True,
         card_renderer: CardRenderer | None = None,
         dashboard_renderer: DashboardRenderer | None = None,
@@ -188,6 +188,7 @@ class HelldiversService:
         self.enable_wiki = enable_wiki
         self.translate_wiki = translate_wiki and enable_translation
         self.map_renderer = map_renderer
+        self.map_screenshot = map_screenshot
         self.enable_map = enable_map
         self.card_renderer = card_renderer
         self.dashboard_renderer = dashboard_renderer
@@ -321,6 +322,11 @@ class HelldiversService:
             except Exception as e:
                 logger.warning(f"[HD2] arsenal client stop error: {e}")
         await self.cache.stop()
+        if self.map_screenshot is not None:
+            try:
+                await self.map_screenshot.close()
+            except Exception as e:
+                logger.warning(f"[HD2] map screenshot close error: {e}")
         if self.wiki_client is not None:
             try:
                 await self.wiki_client.close()
@@ -1190,70 +1196,8 @@ class HelldiversService:
         if not query:
             return WIKI_USAGE
 
-        # 中文查询先经官方词表翻译成英文（wiki 是英文站，直接发中文会命中无关页）
-        original_query = query
-        translated_note = ""
-        if contains_cjk(query):
-            english = translate_query(query)
-            if english and english.strip().lower() != query.lower():
-                query = english.strip()
-                translated_note = f"（已按官方译名转换为：{query}）"
-            elif not english:
-                # 词表没覆盖的中文词：搜索结果相关性不可信，直接提示用法
-                return (
-                    f"❓ 未在官方译名词表中找到“{original_query}”。\n"
-                    "中文搜索依赖官方译名词表（战备/敌人/星球等 500+ 条），"
-                    "请换用英文关键词重试，例如：\n"
-                    "· /wiki railgun\n"
-                    "· /wiki Bile Titan"
-                )
-
         try:
-            # 直接标题命中（仅英文词面；CJK 查询已在上方翻译成英文）
-            direct = await self.wiki_client.get_page_summary(query, full=full)
-            if direct and direct.get("extract"):
-                extract = await self._translate_wiki_extract(
-                    str(direct.get("title") or query),
-                    str(direct.get("extract") or ""),
-                )
-                return format_wiki_summary(
-                    title=str(direct.get("title") or query),
-                    extract=extract,
-                    url=str(direct.get("url") or self.wiki_client.page_url(query)),
-                    note=translated_note,
-                    full=full,
-                )
-
-            results = await self.wiki_client.search(query)
-            if not results:
-                return format_wiki_search_results(
-                    query,
-                    [],
-                    search_url=self.wiki_client.search_url(query),
-                )
-
-            best = self.wiki_client.pick_best_title(query, results)
-            if best:
-                page = await self.wiki_client.get_page_summary(best, full=full)
-                if page:
-                    extract = await self._translate_wiki_extract(
-                        str(page.get("title") or best),
-                        str(page.get("extract") or ""),
-                    )
-                    return format_wiki_summary(
-                        title=str(page.get("title") or best),
-                        extract=extract,
-                        url=str(page.get("url") or self.wiki_client.page_url(best)),
-                        note=translated_note,
-                        full=full,
-                    )
-
-            # 多候选：列表展示
-            return format_wiki_search_results(
-                query,
-                results,
-                search_url=self.wiki_client.search_url(query),
-            )
+            return await self.wiki_client.query(query, full=full)
         except Exception as e:
             logger.exception(f"[HD2] wiki query error: {e}")
             return "❌ Wiki 查询失败，请稍后重试。"
@@ -2070,6 +2014,33 @@ class HelldiversService:
         """返回 (说明文字, 图片路径或 None)。"""
         if not self.enable_map:
             return "❌ 地图功能已在配置中关闭（enable_map=false）。", None
+        if self.map_screenshot is not None:
+            try:
+                fetched_at, path = await self.map_screenshot.capture()
+                return (
+                    "银河战争中文星图\n"
+                    f"数据采集时间：{fetched_at}\n来源：Jerry 中文资料站",
+                    path,
+                )
+            except Exception as e:
+                logger.warning(
+                    "[HD2] Chinese map unavailable, using local map: %s: %s "
+                    "(stage=%s, proxy_configured=%s, %s)",
+                    type(e).__name__, e,
+                    getattr(self.map_screenshot, "capture_stage", "unknown"),
+                    bool(getattr(self.map_screenshot, "proxy_url", "")),
+                    getattr(self.map_screenshot, "capture_detail", "no resource diagnostics"),
+                )
+        try:
+            caption, path = await self._get_local_map_result()
+            if path is not None:
+                caption += "\n（本地绘图）"
+            return caption, path
+        except Exception:
+            logger.exception("[HD2] local map fallback failed")
+            return "❌ 暂时无法生成地图，请稍后重试。", None
+
+    async def _get_local_map_result(self) -> tuple[str, Path | None]:
         state = await self._build_war_state()
         if not state.planets:
             return "❌ 暂时无法获取星球数据，无法生成地图。", None
@@ -2097,14 +2068,7 @@ class HelldiversService:
             planets=len(state.planets),
         )
         if self.map_renderer is None or not self.map_renderer.available:
-            # 文本兜底：活跃战役 Top 列表
-            lines = [caption, "（Pillow 未安装，以下为文本战线摘要）"]
-            for c in state.campaigns[:15]:
-                p = c.get("planet") if isinstance(c.get("planet"), dict) else {}
-                name = p.get("name") or "?"
-                players = (p.get("statistics") or {}).get("playerCount", 0)
-                lines.append(f"▎{name}  在线:{players}")
-            return "\n".join(lines), None
+            return "❌ 本地地图渲染不可用，请检查 Pillow 和图片素材。", None
         from datetime import datetime
 
         subtitle = datetime.now().strftime("更新 %Y-%m-%d %H:%M")

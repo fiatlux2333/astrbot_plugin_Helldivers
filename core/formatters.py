@@ -420,14 +420,14 @@ WIKI_USAGE = """\
 📖 Wiki 查询用法
 -------------
 /wiki <关键词>       搜索并查看词条摘要
-/wiki <关键词> -f    查看词条全文
-支持中英文关键词（中文自动按官方译名搜索）
+/wiki <关键词> -f    查看详细内容
+直接检索 Jerry 静态中文资料，支持中文、英文名称和型号
 例如:
   /wiki Railgun
   /wiki 磁轨炮
   /wiki Bile Titan -f
 -------------
-资料来源: helldivers.wiki.gg"""
+资料来源: Jerry 静态中文资料站"""
 
 
 def format_dss_message(station: dict[str, Any] | None) -> str:

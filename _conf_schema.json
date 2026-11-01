@@ -359,15 +359,11 @@
     "hint": "数据来自开源 HD2Tool 项目，含官方中文译名和玩家俗称；首次使用自动下载约 500KB 数据，每 24 小时检查更新",
     "default": true
   },
-  "wiki_base": {
-    "description": "Wiki 站点根地址",
+  "wiki_static_base": {
+    "description": "Jerry 静态中文 Wiki 根地址",
     "type": "string",
-    "default": "https://helldivers.wiki.gg"
-  },
-  "wiki_api_path": {
-    "description": "MediaWiki API 路径",
-    "type": "string",
-    "default": "/api.php"
+    "hint": "仅支持同结构 HTTPS 静态源；旧 MediaWiki 配置不再生效",
+    "default": "https://jerry114514.github.io/HD2_Wiki/"
   },
   "wiki_search_limit": {
     "description": "Wiki 搜索候选数量",
@@ -381,21 +377,10 @@
     "default": 900
   },
   "wiki_full_extract_chars": {
-    "description": "Wiki 全文模式最大字符数（/wiki 关键词 -f）",
+    "description": "Wiki 详细内容最大字符数（/wiki 关键词 -f）",
     "type": "int",
     "hint": "建议 2000–4000",
     "default": 3000
-  },
-  "wiki_prefer_hd2": {
-    "description": "优先 Helldivers 2 词条（过滤 Helldivers 1: 前缀）",
-    "type": "bool",
-    "default": true
-  },
-  "translate_wiki": {
-    "description": "自动翻译 Wiki 摘要为中文",
-    "type": "bool",
-    "hint": "依赖 enable_translation；启用 drop_untranslated_content 时失败不发送英文摘要",
-    "default": true
   },
   "wiki_cache_ttl": {
     "description": "Wiki 词条缓存有效期（秒）",
@@ -412,6 +397,17 @@
     "description": "启用 /map 战争地图（图片）",
     "type": "bool",
     "default": true
+  },
+  "map_screenshot_cache_ttl": {
+    "description": "中文星图截图缓存有效期（秒）",
+    "type": "int",
+    "default": 300
+  },
+  "map_screenshot_timeout": {
+    "description": "中文星图截图总超时（秒）",
+    "type": "int",
+    "hint": "包含启动和排队；失败回退本地绘图，不发送网页链接",
+    "default": 45
   },
   "map_cache_ttl": {
     "description": "地图图片缓存有效期（秒）",

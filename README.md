@@ -2,7 +2,7 @@
 
 基于 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 的《绝地潜兵2》银河战争情报插件，当前版本 `v1.10.3`。
 
-数据来源：Helldivers 2 Community API、Helldivers Companion、Steam News API、helldivers.wiki.gg。常规情报由 Pillow 渲染为中文卡片；`/hd2news`、`/dss`、`/planet`、`/companion` 通过 Playwright 截取 Companion 网页并做术语级中文翻译。内置双层缓存、请求限流重试、官方译名词表（569 条）预替换与 AI 翻译（内置接口或 OpenAI 兼容接口）；翻译提示词实质性改版时通过协议指纹（当前 v4）自动失效旧翻译缓存。
+数据来源：Helldivers 2 Community API、Helldivers Companion、Steam News API、Jerry 中文资料站，以及军需簿使用的 HD2Tool / wiki.gg 补充数据。常规情报由 Pillow 渲染为中文卡片；`/hd2news`、`/dss`、`/planet`、`/companion` 通过 Playwright 截取 Companion 网页并做术语级中文翻译。`/map` 优先截取 Jerry 中文星图，失败回退本地绘图；`/wiki` 仅直接检索 Jerry 静态中文数据，不再请求 MediaWiki 或调用模型翻译。内置双层缓存、请求限流重试、官方译名词表（569 条）预替换与 AI 翻译（内置接口或 OpenAI 兼容接口）；翻译提示词实质性改版时通过协议指纹（当前 v4）自动失效旧翻译缓存。
 
 ## 指令
 
@@ -15,11 +15,11 @@
 /companion                         Companion 首页截图（含翻译）
 /dss                               民主空间站截图与中文情报
 /planet <名称/编号/slug/链接>       星球详情
-/map                               银河战争地图
+/map                               中文星图截图；失败回退本地绘图
 /warfront <阵营>                   阵营战线战况
 /global_events                     全球事件
 /steam                             Steam 官方更新
-/wiki <关键词> [-f]                Wiki 查询；-f 返回全文；中文自动按官方译名搜索
+/wiki <关键词> [-f]                Jerry 中文资料查询；-f 返回详细内容
 /hd2data <名称>                    军需簿：武器/护甲/敌人（支持俗称如电喷/泰坦）
 /hd2refresh 或 /刷新缓存            强制刷新 Companion 截图缓存
 /hd2ping 或 /诊断 /自检             自诊断：数据源健康、缓存年龄、关键配置
@@ -63,6 +63,22 @@ git clone https://github.com/fiatlux2333/astrbot_plugin_Helldivers
 cd astrbot_plugin_Helldivers
 python -m pip install -r requirements.txt
 ```
+
+### 打包 ZIP 上传测试
+
+在本项目目录执行（Linux、macOS 或 Windows Git Bash）：
+
+```bash
+bash pack.sh
+```
+
+输出为 `dist/astrbot_plugin_Helldivers.zip`，可在 AstrBot WebUI 的插件管理页面选择本地 ZIP 安装。包内只有一层 `astrbot_plugin_Helldivers/` 目录，包含入口、配置 Schema、依赖声明、运行模块、素材和许可说明；不包含虚拟环境、测试、缓存、本地配置或 Chromium。脚本只依赖 Bash 与 Python 3.11+，不需要 `zip`、`unzip` 或 Git，会检查 Python 语法、JSON 和 ZIP 完整性，验证通过才替换旧包，不删除 `dist` 中其他文件。
+
+默认依次检测项目虚拟环境、`python3`、`python`；需要指定解释器时使用 `PYTHON_BIN=/path/to/python bash pack.sh`。脚本也可以从其他目录通过绝对路径执行。
+
+按 [AstrBot 官方配置文档](https://docs.astrbot.app/dev/star/guides/plugin-config.html)，包内保留 `_conf_schema.json`；安装时由 AstrBot 创建或更新 `data/config/<plugin_name>_config.json`。不要将本机的配置实体、密钥或 Cookie 放进安装包。安装后在 WebUI 配置，重载插件生效。
+
+ZIP 不包含运行环境。服务器仍须在 AstrBot 使用的 Python 环境中准备 `requirements.txt` 依赖、Playwright Chromium、系统库和中文字体，见下文。生成包并通过静态检查不代表已完成服务器收发验收。
 
 ### Chromium 浏览器与系统库（截图功能必需）
 
@@ -157,7 +173,7 @@ docker run -d --name browserless --restart unless-stopped --shm-size=2g \
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `enable_translation` | bool | `true` | 翻译指令、Companion 页面、星球/DSS 情报、Steam 公告与可选 Wiki 摘要 |
+| `enable_translation` | bool | `true` | 翻译指令、Companion 页面、星球/DSS 情报与 Steam 公告；不影响 Wiki |
 | `translation_mode` | string | `auto` | `auto` / `builtin` / `openai` |
 | `translation_api_url` | string | 内置默认地址 | 翻译接口或 OpenAI 兼容 API 地址 |
 | `translation_api_key` | text | `""` | OpenAI 兼容接口 Bearer Token（敏感字段，已脱敏显示） |
@@ -231,8 +247,15 @@ Cookie 是登录凭据，不要发给他人或提交到仓库。若登录验证�
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `enable_wiki` | bool | `true` | 启用 Wiki 查询 |
+| `wiki_static_base` | string | `https://jerry114514.github.io/HD2_Wiki/` | Jerry 静态源目录，仅支持同结构 HTTPS 镜像 |
+| `wiki_cache_ttl` | int | `21600` | Wiki 分类详情缓存秒数 |
+| `wiki_search_cache_ttl` | int | `1800` | Wiki 检索索引缓存秒数 |
+| `wiki_extract_chars` | int | `900` | 普通模式正文字符上限 |
+| `wiki_full_extract_chars` | int | `3000` | `-f` 详细内容字符上限，截断明确提示 |
 | `enable_arsenal` | bool | `true` | 启用军需簿查询 |
 | `enable_map` | bool | `true` | 启用银河战争地图 |
+| `map_screenshot_cache_ttl` | int | `300` | 中文星图截图缓存秒数，与本地绘图缓存独立 |
+| `map_screenshot_timeout` | int | `45` | 截图总预算，包含浏览器启动及排队 |
 | `steam_news_count` | int | `10` | Steam 公告缓存数量 |
 | `steam_image_enabled` | bool | `true` | 启用 Steam 公告主图 |
 | `remote_image_max_bytes` | int | `8388608` | 远程新闻图片最大字节数 |
@@ -250,6 +273,19 @@ Cookie 是登录凭据，不要发给他人或提交到仓库。若登录验证�
 9. Pillow 或中文字体缺失时，图片可能无法生成或中文显示为方框。
 10. 银河快报转载保留原动态出处，请遵守原作者的转载要求。
 
+### 中文星图与 Wiki
+
+- `/map` 与 `/地图` 使用独立、按需启动的 Chromium，不受 `companion_enabled` 或 Companion 后端选择影响。截图尺寸为 2560×1440，收起侧栏；字体、战况与核心图层加载后才生成图片。
+- 地图说明标注网页实际加载的快照时间。缺少时间、时间异常或超过 30 分钟的快照不用于截图；浏览器缺失、WebGL 不可用、页面变更或超时均回退现有 Pillow 地图。所有地图回复均不附网页链接；两种绘图方式都失败时只提示失败。
+- Chromium 和系统依赖仍按安装章节准备。截图不需要模型或翻译密钥；失败后暂退避 60 秒，避免每次请求重复启动失败的浏览器。
+- 独立星图浏览器使用 HTTP/1.1（禁用 HTTP/2 和 QUIC），缓解已实测遇到的关键脚本下载挂起问题，不改变 Companion 浏览器的设置。优先加载已安装的 Noto Sans CJK SC / Noto Sans SC、微软雅黑、苹方或文泉驿中文字体；只有确认本机字体实际加载成功后，才取消重复的远程思源黑体下载。没有可用本机字体时仍尝试原站字体，中文字体不可用则回退本地绘图，不用缺字截图冒充成功。
+- 中文星图导航、数据与图层等待均使用 `map_screenshot_timeout` 的预算，由外层限制总耗时，不再提前触发 Playwright 默认的 30 秒导航超时。导航仅等待主文档开始加载，之后仍校验战况、字体和图层，不会截取未加载完成的页面。
+- 截图失败日志中的 `stage` 区分导航、页面脚本、战况响应、战况正文、字体、图层和截图；`pending` / `failed` 列出少量未完成或失败资源的路径（不含查询参数），`script_errors` 为页面脚本错误数，`font` 标明本机或远程字体。`elapsed` / `budget` 显示实际耗时和生效的总预算，修改设置后需重载插件确认生效。`proxy_configured` 只表示是否配置了代理，不表示代理连通。若持续卡在导航或脚本加载，应在 AstrBot 所在服务器或容器内检查到 GitHub Pages 的连接及 `proxy_url`，而不是只在本机浏览器验证。Docker 中 `127.0.0.1` 指容器自身，不能直接指向宿主机代理。慢速但可达的网络可适当提高 `map_screenshot_timeout`；完全不可达时提高超时不会修复连接。
+- `/wiki`、`/维基`、`/百科` 直接检索中文、英文名称和型号。非唯一匹配或仅正文命中会列出候选，不自动把第一条当答案；同名公告候选带版本与章节标识。
+- Wiki 覆盖武器、战备、敌人、强化资源、战争债券、任务、机制和更新公告。优先显示中文字段，缺失时注明并保留必要原文；详情失败时只返回明确标注的索引摘录。`-f` 是更长的详细内容，不保证整篇全文。
+- Wiki 缓存在插件数据目录 `jerry_wiki/`，按源地址隔离；更新校验失败不覆盖有效文件。源站失败时最多使用七天内保存的缓存并标注状态；这是本地保存时间，不代表源站内容在七天内更新。
+- 旧 `wiki_base`、`wiki_api_path`、`wiki_prefer_hd2`、`translate_wiki` 配置不再生效，旧 `wiki_cache.json` 不会用于新源。此变更不影响 `/hd2data` 的独立数据来源。
+
 ## 效果展示
 
 <img width="666" height="888" alt="银河战争总览" src="https://github.com/user-attachments/assets/0afedfbc-6abc-4bf7-98fb-c83bf8342bf0" />
@@ -262,6 +298,8 @@ Cookie 是登录凭据，不要发给他人或提交到仓库。若登录验证�
 - [Helldivers 2 Community API](https://api.helldivers2.dev)
 - [Steam News API](https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/)
 - [Helldivers Wiki](https://helldivers.wiki.gg/)
+- [Jerry 中文资料站](https://jerry114514.github.io/HD2_Wiki/wiki.html)（`/wiki` 唯一查询源）
+- [Jerry 中文银河星图](https://jerry114514.github.io/HD2-Galatic_war-Map/galaxy-map-v2.html)（`/map` 优先截图源）
 - [Helldivers Companion](https://helldiverscompanion.com/)
 - [银河快报 B站空间](https://space.bilibili.com/3546777720457465/dynamic)
 
@@ -270,6 +308,8 @@ Cookie 是登录凭据，不要发给他人或提交到仓库。若登录验证�
 ## 许可证
 
 本项目使用 [MIT License](LICENSE) 授权，素材来源与许可说明见 [assets/LICENSES.md](assets/LICENSES.md)。
+
+Jerry 站点代码与其数据许可分开：上游 README 声明站点 HTML/CSS/JS 为 MIT，数据、翻译及图片说明为 CC BY-NC-SA 4.0。本插件的 MIT 许可不覆盖这些第三方内容。查询结果保留来源署名，Wiki 保留词条出处；地图在文字说明中署名，原始出处列于本 README 和素材许可文件。使用或再分发有关内容须遵守署名、非商用、相同方式共享等上游许可条件，游戏素材版权仍归各权利人。
 
 Helldivers 及相关名称归属其权利人，本插件为非官方爱好者作品。
 

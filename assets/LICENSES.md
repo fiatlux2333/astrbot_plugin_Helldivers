@@ -27,6 +27,25 @@ Helldivers and related names and fictional concepts are trademarks or intellectu
 
 ## Asset inventory
 
+### Runtime Jerry content
+
+`/map` captures the Chinese galaxy map at
+<https://jerry114514.github.io/HD2-Galatic_war-Map/galaxy-map-v2.html>.
+`/wiki` retrieves static Chinese data from
+<https://jerry114514.github.io/HD2_Wiki/>.
+Neither the site's source files nor its full data set are bundled in this plugin;
+runtime caches reside in the AstrBot plugin data directory.
+
+Upstream: <https://github.com/Jerry114514/Jerry114514.github.io>.
+The upstream README declares HTML/CSS/JS under MIT and data, translations and
+image descriptions under CC BY-NC-SA 4.0. These third-party materials are not
+relicensed under this plugin's MIT license. Preserve attribution, observe the
+noncommercial and share-alike conditions, and retain game-rightsholder notices.
+Map replies credit Jerry without a URL; this document records the original URL.
+Wiki replies include the specific Jerry entry URL and source attribution.
+The plugin reformats text and collapses map controls for chat presentation;
+game data and translations remain third-party community content.
+
 - `emblems/super_earth.png`
 - `emblems/dss.png`
 - `emblems/automaton.png`
