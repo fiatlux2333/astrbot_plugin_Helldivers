@@ -23,6 +23,7 @@ from astrbot_plugin_Helldivers.core.push import (
     QQGroupSubscriptionChecker,
     group_session,
 )
+from astrbot_plugin_Helldivers.clients.companion_screenshot import CompanionCaptureSnapshot
 from astrbot_plugin_Helldivers.main import HelldiversPlugin
 
 A = "bot:GroupMessage:100"
@@ -95,7 +96,10 @@ def _bilibili(directory, plugin, uid="1"):
         log_warning=lambda _: None,
     )
     monitor.fetch_posts = AsyncMock(return_value=[])
-    monitor.download_images = AsyncMock(return_value=[])
+    image = directory / "fixture.png"
+    image.parent.mkdir(parents=True, exist_ok=True)
+    image.write_bytes(b"image")
+    monitor.download_images = AsyncMock(side_effect=lambda post: [image for _ in post.image_urls])
     return monitor
 
 
@@ -434,11 +438,11 @@ class CompanionPendingDeliveryTests(_AsyncTests):
         self.plugin.companion_news_monitor = monitor
         self.context.results[B] = False
         image = self.image()
-        await self.plugin._check_companion_news_change(image)
+        await self.plugin._check_companion_news_change(CompanionCaptureSnapshot(image.read_bytes(), ("new news",), False))
         self.assertEqual(len(monitor.pending_news), 1)
         self.context.results[B] = True
         self.context.sent.clear()
-        await self.plugin._check_companion_news_change(image)
+        await self.plugin._check_companion_news_change(CompanionCaptureSnapshot(image.read_bytes(), ("new news",), False))
         self.assertEqual(self.context.sent, [B])
         self.assertFalse(monitor.pending_news)
 
@@ -450,11 +454,11 @@ class CompanionPendingDeliveryTests(_AsyncTests):
         await monitor.queue_news("changed", image)
         self.plugin.companion_news_monitor = monitor
         self.plugin._companion_news_push_enabled = False
-        await self.plugin._check_companion_news_change(image)
+        await self.plugin._check_companion_news_change(CompanionCaptureSnapshot(image.read_bytes(), ("new news",), False))
         self.assertEqual(self.context.sent, [])
         self.assertIn("changed", monitor.pending_news)
         self.plugin._companion_news_push_enabled = True
-        await self.plugin._check_companion_news_change(image)
+        await self.plugin._check_companion_news_change(CompanionCaptureSnapshot(image.read_bytes(), ("new news",), False))
         self.assertFalse(monitor.pending_news)
 
     async def test_failed_capture_does_not_block_saved_snapshot_delivery(self):
@@ -464,7 +468,7 @@ class CompanionPendingDeliveryTests(_AsyncTests):
         await monitor.queue_news("changed", self.image())
         self.plugin.companion_news_monitor = monitor
         self.plugin.config["companion_warmup_kinds"] = "news_latest"
-        self.plugin.companion_playwright.capture = AsyncMock(
+        self.plugin.companion_playwright.capture_snapshot = AsyncMock(
             side_effect=RuntimeError("news page unavailable")
         )
         with (

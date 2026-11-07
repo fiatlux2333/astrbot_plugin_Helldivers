@@ -19,7 +19,7 @@
 python -m pytest -q
 python3 scripts/check_release.py
 bash pack.sh
-python3 scripts/check_release.py dist/astrbot_plugin_Helldivers-v2.0.0.zip
+python3 scripts/check_release.py dist/astrbot_plugin_Helldivers-v2.0.1.zip
 ```
 
 `scripts/check_release.py` 检查元数据、版本一致性、日志导入，以及安装包路径和内容。`pack.sh` 打包前检查源码，替换产物前检查 ZIP，并保留旧包。压缩包上限按 16 MB 控制。

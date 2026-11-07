@@ -13,6 +13,7 @@ from astrbot_plugin_Helldivers.clients.companion_news_monitor import (
     CompanionNewsMonitor,
     news_fingerprint,
 )
+from astrbot_plugin_Helldivers.clients.companion_screenshot import CompanionCaptureSnapshot
 from astrbot_plugin_Helldivers.main import HelldiversPlugin
 
 
@@ -129,13 +130,13 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
             plugin.companion_playwright = SimpleNamespace(capture_texts=lambda _: texts)
             plugin._served_companion_stale = lambda _: False
             plugin._push_companion_news = AsyncMock(side_effect=[1, 0])
-            await plugin._check_companion_news_change(image)
+            await plugin._check_companion_news_change(CompanionCaptureSnapshot(image.read_bytes(), tuple(texts), False))
             plugin._push_companion_news.assert_not_awaited()
             texts[1] = "10 MINUTES AGO"
-            await plugin._check_companion_news_change(image)
+            await plugin._check_companion_news_change(CompanionCaptureSnapshot(image.read_bytes(), tuple(texts), False))
             plugin._push_companion_news.assert_not_awaited()
             texts[0] = "New article"
-            await plugin._check_companion_news_change(image)
+            await plugin._check_companion_news_change(CompanionCaptureSnapshot(image.read_bytes(), tuple(texts), False))
             fingerprint = news_fingerprint(texts)
             self.assertEqual(monitor.pending_news[fingerprint].sessions, ["b"])
             image.write_bytes(b"another-news")
@@ -151,7 +152,7 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(observed, [(b"original-news", ["b"])])
             self.assertEqual(plugin.companion_news_monitor.pending_news, {})
             self.assertFalse(monitor.pending_image_path(fingerprint).exists())
-            await plugin._check_companion_news_change(image)
+            await plugin._check_companion_news_change(CompanionCaptureSnapshot(image.read_bytes(), tuple(texts), False))
             self.assertEqual(plugin._push_companion_news.await_count, 1)
 
     async def test_companion_queue_retains_multiple_updates_and_unsubscribe(self):
@@ -184,7 +185,7 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
             plugin.companion_playwright = SimpleNamespace(capture_texts=lambda _: ["New article"])
             plugin._served_companion_stale = lambda _: True
             plugin._push_companion_news = AsyncMock()
-            await plugin._check_companion_news_change(Path(tmp) / "stale.png")
+            await plugin._check_companion_news_change(CompanionCaptureSnapshot(b"old image", ("New article",), True))
             self.assertEqual(monitor.pending_news, {})
             self.assertEqual(monitor.last_fingerprint, news_fingerprint(["Old article"]))
             plugin._push_companion_news.assert_not_awaited()
@@ -279,14 +280,14 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
         plugin = self.plugin()
         plugin.config = {"companion_warmup_kinds": "station"}
         plugin.companion_news_monitor = object()
-        plugin.companion_playwright = SimpleNamespace(capture=AsyncMock(side_effect=RuntimeError("offline")))
+        plugin.companion_playwright = SimpleNamespace(capture_snapshot=AsyncMock(side_effect=RuntimeError("offline")))
         plugin._deliver_pending_companion_news = AsyncMock()
         with patch("astrbot_plugin_Helldivers.main.asyncio.sleep",
                    new=AsyncMock(side_effect=[None, asyncio.CancelledError])):
             with self.assertRaises(asyncio.CancelledError):
                 await plugin._companion_warmup_loop()
         plugin._deliver_pending_companion_news.assert_awaited_once()
-        self.assertEqual(plugin.companion_playwright.capture.call_args.args[0].kind, "news_latest")
+        self.assertEqual(plugin.companion_playwright.capture_snapshot.call_args.args[0].kind, "news_latest")
 
     async def test_subscription_starts_detector_and_restarts_done_task(self):
         plugin = self.plugin()

@@ -249,6 +249,15 @@ TranslationCallback = Callable[
 
 
 @dataclass(frozen=True, slots=True)
+class CompanionCaptureSnapshot:
+    """Immutable content captured under one target lock for news delivery."""
+
+    image_bytes: bytes
+    texts: tuple[str, ...]
+    stale: bool
+
+
+@dataclass(frozen=True, slots=True)
 class CompanionTranslationResult:
     translations: dict[str, str]
     cacheable: bool = True
@@ -623,14 +632,14 @@ class CompanionPlaywrightClient:
         # NOT updated when the TTL cache short-circuits.  Used by the warmup
         # loop to compute a content fingerprint for news-change detection.
         self._last_capture_texts: dict[str, list[str]] = {}
+        self._cached_capture_metadata: dict[str, tuple[tuple[str, ...], bool]] = {}
 
     def capture_texts(self, kind: str) -> list[str] | None:
         """Return the text fragments from the most recent real capture of *kind*.
 
         Returns ``None`` if no capture has performed text extraction yet.
-        When a capture serves a stale cache before extracting text (early
-        loading-failure returns), the previous successful texts are retained,
-        so the returned value may be older than the last ``capture()`` call.
+        A failed capture may leave partial metadata here. News delivery must
+        use capture_snapshot(), which binds metadata to the returned image.
         """
         return self._last_capture_texts.get(kind)
 
@@ -737,17 +746,25 @@ class CompanionPlaywrightClient:
         )
 
     async def capture(self, target: CompanionTarget, *, force: bool = False) -> Path:
+        result = await self._capture(target, force=force, snapshot=False)
+        assert isinstance(result, Path)
+        return result
+
+    async def capture_snapshot(
+        self, target: CompanionTarget, *, force: bool = False
+    ) -> CompanionCaptureSnapshot:
+        result = await self._capture(target, force=force, snapshot=True)
+        assert isinstance(result, CompanionCaptureSnapshot)
+        return result
+
+    async def _capture(
+        self, target: CompanionTarget, *, force: bool, snapshot: bool
+    ) -> Path | CompanionCaptureSnapshot:
         output = self.cached_output_path(target)
-        # Reset stale-tracking at the start of each capture call; it is set
-        # to True inside _capture_uncached when a stale cache is served.
-        self._served_stale.discard(target.kind)
-        if not force and self._cache_is_fresh(output):
-            HEALTH.record_ok("screenshot", detail=f"{target.label} 缓存命中")
-            return output
         try:
             async with asyncio.timeout(self.timeout):
                 captured = await self._capture_within_timeout(
-                    target, output, force=force
+                    target, output, force=force, snapshot=snapshot
                 )
         except TimeoutError as exc:
             HEALTH.record_fail(
@@ -770,18 +787,32 @@ class CompanionPlaywrightClient:
         output: Path,
         *,
         force: bool,
-    ) -> Path:
-        await self.start()
+        snapshot: bool = False,
+    ) -> Path | CompanionCaptureSnapshot:
         key = self._cache_key(target)
         lock = self._locks.setdefault(key, asyncio.Lock())
         self._lock_refs[key] = self._lock_refs.get(key, 0) + 1
         try:
             async with lock:
                 if not force and self._cache_is_fresh(output):
-                    return output
-                async with self._semaphore:
-                    captured = await self._capture_uncached(target, output)
-                self._cleanup()
+                    captured = output
+                    texts, stale = self._cached_capture_metadata.get(key, ((), False))
+                else:
+                    await self.start()
+                    self._served_stale.discard(target.kind)
+                    self._last_capture_texts.pop(target.kind, None)
+                    async with self._semaphore:
+                        captured = await self._capture_uncached(target, output)
+                    texts = tuple(self._last_capture_texts.get(target.kind) or ())
+                    stale = target.kind in self._served_stale
+                    if captured == output:
+                        self._cached_capture_metadata[key] = (texts, stale)
+                    self._cleanup()
+                if snapshot:
+                    # Copy bytes before unlocking: a later capture may replace
+                    # the shared output file while the caller reconciles groups.
+                    content = await asyncio.to_thread(captured.read_bytes)
+                    return CompanionCaptureSnapshot(content, texts, stale)
                 return captured
         finally:
             remaining = self._lock_refs.get(key, 1) - 1

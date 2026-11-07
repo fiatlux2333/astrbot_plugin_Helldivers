@@ -124,7 +124,11 @@ class CompanionNewsMonitor:
         if not value or has_group_subscription(self.sessions, value):
             return False
         self.sessions.append(value)
-        self._save_state()
+        try:
+            self._save_state()
+        except OSError:
+            self.sessions.remove(value)
+            raise
         return True
 
     def unsubscribe(self, unified_msg_origin: str) -> bool:
@@ -132,6 +136,12 @@ class CompanionNewsMonitor:
         value = str(unified_msg_origin).strip()
         if value not in self.sessions:
             return False
+        previous_sessions = list(self.sessions)
+        previous_pending = dict(self.pending_news)
+        previous_delivery = {
+            key: (list(item.sessions), dict(item.retries))
+            for key, item in previous_pending.items()
+        }
         self.sessions.remove(value)
         completed = []
         for fp, item in list(self.pending_news.items()):
@@ -140,7 +150,14 @@ class CompanionNewsMonitor:
             if not item.sessions:
                 del self.pending_news[fp]
                 completed.append(fp)
-        self._save_state()
+        try:
+            self._save_state()
+        except OSError:
+            self.sessions[:] = previous_sessions
+            self.pending_news = previous_pending
+            for key, item in previous_pending.items():
+                item.sessions, item.retries = previous_delivery[key]
+            raise
         for fp in completed:
             self._discard_image(fp)
         return True
@@ -162,6 +179,18 @@ class CompanionNewsMonitor:
             shutil.copyfile(source, temporary)
             if temporary.stat().st_size == 0:
                 raise OSError("新闻截图为空")
+            temporary.replace(output)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    @staticmethod
+    def _write_image(content: bytes, output: Path) -> None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        temporary = output.with_suffix(".tmp")
+        try:
+            if not content:
+                raise OSError("新闻截图为空")
+            temporary.write_bytes(content)
             temporary.replace(output)
         finally:
             temporary.unlink(missing_ok=True)
@@ -205,7 +234,7 @@ class CompanionNewsMonitor:
             if path.name not in active:
                 path.unlink(missing_ok=True)
 
-    async def queue_news(self, fingerprint: str, path: Path) -> bool:
+    async def queue_news(self, fingerprint: str, image: Path | bytes) -> bool:
         async with self._delivery_lock:
             self._ensure_writable()
             self.prune_pending()
@@ -217,12 +246,14 @@ class CompanionNewsMonitor:
             if not self.sessions:
                 self.commit_fingerprint(fingerprint)
                 return False
-            if path.stat().st_size > self.policy.max_image_bytes:
+            size = len(image) if isinstance(image, bytes) else image.stat().st_size
+            if size > self.policy.max_image_bytes:
                 logger.warning("[HD2] Companion snapshot exceeds retention byte limit; skipped: %s", fingerprint)
                 self.commit_fingerprint(fingerprint)
                 return False
             targets = list(self.sessions)
-            await finish_disk_call(self._copy_image, path, self.pending_image_path(fingerprint))
+            writer = self._write_image if isinstance(image, bytes) else self._copy_image
+            await finish_disk_call(writer, image, self.pending_image_path(fingerprint))
             targets = [origin for origin in targets if origin in self.sessions]
             if targets:
                 self.pending_news[fingerprint] = PendingCompanionNews(fingerprint, targets)

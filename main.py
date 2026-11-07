@@ -40,6 +40,7 @@ from .core.campaign_trends import CampaignTrendStore
 from .renderers.card_renderer import CardRenderer
 from .clients.companion_news_monitor import CompanionNewsMonitor, news_fingerprint
 from .clients.companion_screenshot import (
+    CompanionCaptureSnapshot,
     CompanionConfigurationError,
     CompanionPlaywrightClient,
     CompanionScreenshotClient,
@@ -708,14 +709,18 @@ class HelldiversPlugin(Star):
                         and self._companion_news_push_enabled
                         and self.companion_news_monitor is not None
                     )
-                    path = await self.companion_playwright.capture(  # type: ignore[union-attr]
-                        target, force=force
-                    )
+                    if target.kind == "news_latest":
+                        snapshot = await self.companion_playwright.capture_snapshot(  # type: ignore[union-attr]
+                            target, force=force
+                        )
+                        await self._check_companion_news_change(snapshot, retry_pending=False)
+                    else:
+                        await self.companion_playwright.capture(  # type: ignore[union-attr]
+                            target, force=force
+                        )
                     logger.info(
                         "[HD2] Companion 预热完成: %s", target.kind
                     )
-                    if target.kind == "news_latest":
-                        await self._check_companion_news_change(path, retry_pending=False)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001 - background warmup
@@ -755,11 +760,12 @@ class HelldiversPlugin(Star):
                     monitor.unsubscribe(origin)
             logger.info("[HD2] 已清理退出的 QQ 群推送订阅: session=%s", origin)
 
-    async def _check_companion_news_change(self, path: Path, *, retry_pending: bool = True) -> None:
+    async def _check_companion_news_change(
+        self, snapshot: CompanionCaptureSnapshot, *, retry_pending: bool = True
+    ) -> None:
         """Detect news content changes via fingerprint and push to subscribers.
 
-        Called from the warmup loop after each ``news_latest`` capture with
-        the screenshot path already in hand — no second capture needed.
+        Consume one immutable capture result from the warmup loop.
         Save each update and its recipient list before sending. Successful
         groups are acknowledged individually; failed groups keep their snapshot.
         """
@@ -767,12 +773,9 @@ class HelldiversPlugin(Star):
         if monitor is None:
             return
         await self._prune_push_subscriptions()
-        client = self.companion_playwright
-        if client is None:
-            return
         if self._companion_news_push_enabled and retry_pending:
             await monitor.retry_pending(self._push_companion_news)
-        texts = client.capture_texts("news_latest")
+        texts = list(snapshot.texts)
         if not texts:
             return
         fingerprint = news_fingerprint(texts)
@@ -793,14 +796,14 @@ class HelldiversPlugin(Star):
         # 翻译未完成时 capture 会返回旧缓存截图（stale-while-revalidate），
         # 而文本指纹已是新内容——此时推送的是过期图片。跳过推送且不提交
         # 指纹，等下一轮预热拿到带新内容的截图再推。
-        if self._served_companion_stale("news_latest"):
+        if snapshot.stale:
             logger.info(
                 "[HD2] Companion 新闻已更新，但截图为旧缓存（翻译未完成），"
                 "本轮跳过推送，下一轮重试"
             )
             return
         try:
-            queued = await monitor.queue_news(fingerprint, path)
+            queued = await monitor.queue_news(fingerprint, snapshot.image_bytes)
         except OSError as exc:
             logger.warning(
                 "[HD2] Companion 新闻待发送截图保存失败，下一轮重试: %s", exc
@@ -913,18 +916,16 @@ class HelldiversPlugin(Star):
             )
             return 0
         text = post.text or "（该动态没有文字内容）"
+        if len(image_paths) != len(post.image_urls):
+            raise RuntimeError("Bilibili images incomplete; keeping pending delivery")
         # 预读图片字节：AstrBot 容器与 OneBot 客户端宿主机分离部署时，
         # file:/// 路径跨进程不可读，直接内嵌 base64 绕过文件系统。
         image_bytes: list[bytes] = []
         for path in image_paths:
-            try:
-                image_bytes.append(await asyncio.to_thread(path.read_bytes))
-            except OSError as exc:
-                logger.warning(
-                    "[HD2] Bilibili image unreadable: path=%s error=%s",
-                    path,
-                    exc,
-                )
+            data = await asyncio.to_thread(path.read_bytes)
+            if not data:
+                raise OSError(f"Bilibili image is empty: {path}")
+            image_bytes.append(data)
         delivered = 0
         for unified_msg_origin in sessions:
             try:

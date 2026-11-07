@@ -18,6 +18,7 @@ from astrbot_plugin_Helldivers.clients.companion_news_monitor import CompanionNe
 from astrbot_plugin_Helldivers.clients.translator import TranslationService
 from astrbot_plugin_Helldivers.core.persistence import write_json_atomic
 from astrbot_plugin_Helldivers.core.push_policy import PushPolicy
+from astrbot_plugin_Helldivers.clients.companion_screenshot import CompanionCaptureSnapshot
 from astrbot_plugin_Helldivers.main import HelldiversPlugin
 from astrbot_plugin_Helldivers.renderers.card_specs import build_arsenal_candidates_card
 
@@ -153,10 +154,10 @@ class DeliveryTests(TempCase):
         plugin._push_companion_news = AsyncMock(return_value=1)
         for age in ("10 minutes ago", "15 minutes ago", "Published an hour ago"):
             texts[-1] = age
-            await plugin._check_companion_news_change(self.image)
+            await plugin._check_companion_news_change(CompanionCaptureSnapshot(self.image.read_bytes(), tuple(texts), False))
         plugin._push_companion_news.assert_not_awaited()
         texts[1] = "Defend planet"
-        await plugin._check_companion_news_change(self.image)
+        await plugin._check_companion_news_change(CompanionCaptureSnapshot(self.image.read_bytes(), tuple(texts), False))
         plugin._push_companion_news.assert_awaited_once()
 
     async def test_old_sha1_baseline_migrates_without_resetting_pending(self):

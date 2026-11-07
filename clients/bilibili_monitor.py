@@ -382,7 +382,11 @@ class BilibiliMonitor:
         if not value or has_group_subscription(self.sessions, value):
             return False
         self.sessions.append(value)
-        self._save_state()
+        try:
+            self._save_state()
+        except OSError:
+            self.sessions.remove(value)
+            raise
         return True
 
     def unsubscribe(self, unified_msg_origin: str) -> bool:
@@ -390,13 +394,27 @@ class BilibiliMonitor:
         value = str(unified_msg_origin).strip()
         if value not in self.sessions:
             return False
+        previous_sessions = list(self.sessions)
+        previous_pending = dict(self.pending_posts)
+        previous_delivery = {
+            key: (list(item.sessions), dict(item.retries))
+            for key, item in previous_pending.items()
+        }
         self.sessions.remove(value)
         for dynamic_id, item in list(self.pending_posts.items()):
             item.sessions = [origin for origin in item.sessions if origin != value]
             item.retries.pop(value, None)
             if not item.sessions:
                 del self.pending_posts[dynamic_id]
-        self._save_state()
+        try:
+            self._save_state()
+        except OSError:
+            self.sessions[:] = previous_sessions
+            self.pending_posts = previous_pending
+            # Preserve the item objects held by an in-flight delivery coroutine.
+            for key, item in previous_pending.items():
+                item.sessions, item.retries = previous_delivery[key]
+            raise
         return True
 
     async def start(self) -> None:
@@ -665,6 +683,8 @@ class BilibiliMonitor:
                 continue
             try:
                 paths = await self.download_images(item.post)
+                if len(paths) != len(item.post.image_urls):
+                    raise RuntimeError("Bilibili images incomplete; keeping pending delivery")
             except Exception as exc:  # noqa: BLE001 - isolate each pending post
                 self.log_warning(
                     f"[HD2] Bilibili pending images failed: dynamic={dynamic_id} error={exc}"

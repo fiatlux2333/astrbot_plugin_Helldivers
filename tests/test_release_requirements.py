@@ -60,7 +60,7 @@ class MetadataPolicyTests(unittest.TestCase):
         _PluginUpdater.validate_plugin_metadata(metadata, "metadata.yaml")
         self.assertTrue(set(metadata["support_platforms"]) <= ADAPTER_NAME_2_TYPE.keys())
         self.assertTrue(SpecifierSet(metadata["astrbot_version"]).contains("4.28.2"))
-        self.assertEqual(check_files(fixture_files())["version"], "2.0.0")
+        self.assertEqual(check_files(fixture_files())["version"], "2.0.1")
 
     def test_missing_wrong_type_and_template_fields_fail(self):
         cases = [("name", "astrbot_plugin_example"), ("author", ""), ("version", 2.0),
@@ -96,7 +96,7 @@ class MetadataPolicyTests(unittest.TestCase):
 
     def test_runtime_and_user_agent_version_mismatches_are_rejected(self):
         files = fixture_files()
-        files["core/plugin_info.py"] = files["core/plugin_info.py"].replace(b'v2.0.0', b'v1.10.3')
+        files["core/plugin_info.py"] = files["core/plugin_info.py"].replace(b'v2.0.1', b'v1.10.3')
         with self.assertRaisesRegex(ValueError, "runtime version"):
             check_files(files)
         files = fixture_files(); schema = json.loads(files["_conf_schema.json"])
@@ -131,4 +131,4 @@ class ArchivePolicyTests(unittest.TestCase):
             with zipfile.ZipFile(path, "w") as archive:
                 for name, body in fixture_files().items():
                     archive.writestr(name, body)
-            self.assertEqual(check_path(path)["version"], "2.0.0")
+            self.assertEqual(check_path(path)["version"], "2.0.1")
