@@ -1374,7 +1374,7 @@ class DSSRenderer:
         _draw_planet(base, station, planet, planet_box, now_utc, self.local_timezone)
         _draw_actions(base, station, actions_box, now_utc)
         draw = ImageDraw.Draw(base, "RGBA")
-        footer = "超级地球武装部队 // DSS 遥测 // api.helldivers2.dev"
+        footer = str(station.get("_cache_note") or "超级地球武装部队 // DSS 遥测 // api.helldivers2.dev")
         draw.text((28, 942), footer, font=_font(8, True), fill=_DIM)
 
         if (self.width, self.height) != (WIDTH, HEIGHT):

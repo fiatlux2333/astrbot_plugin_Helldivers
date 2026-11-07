@@ -52,7 +52,7 @@ class FingerprintTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)
             (path / "state.json").write_text(json.dumps({
-                "sessions": ["a"], "last_fingerprint": "legacy-sha1",
+                "sessions": ["a"], "last_fingerprint": "a" * 40,
             }))
             monitor = CompanionNewsMonitor(path)
             fingerprint = news_fingerprint(["Article"])
@@ -71,14 +71,14 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
             monitor.subscribe("b")
             monitor.fetch_posts = AsyncMock(return_value=[BilibiliPost("new", "author", "news", ())])
             self.assertEqual(await monitor.check_once(), 1)
-            self.assertEqual(monitor.pending["new"]["sessions"], ["b"])
+            self.assertEqual(monitor.pending_posts["new"].sessions, ["b"])
             sender = AsyncMock(return_value=1)
             restored = make_bilibili(path, sender)
             restored.fetch_posts = AsyncMock(return_value=[])
             await restored.check_once()
             self.assertEqual(sender.await_count, 1)
             self.assertEqual(sender.call_args.args[2], ["b"])
-            self.assertEqual(restored.pending, {})
+            self.assertEqual(restored.pending_posts, {})
             await restored.check_once()
             self.assertEqual(sender.await_count, 1)
 
@@ -91,9 +91,9 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
             monitor.subscribe("b")
             monitor.fetch_posts = AsyncMock(return_value=[BilibiliPost("new", "author", "news", ())])
             self.assertEqual(await monitor.check_once(), 0)
-            self.assertEqual(monitor.pending["new"]["sessions"], ["a", "b"])
+            self.assertEqual(monitor.pending_posts["new"].sessions, ["a", "b"])
             await monitor.check_once()
-            self.assertEqual(monitor.pending, {})
+            self.assertEqual(monitor.pending_posts, {})
 
     async def test_bilibili_retries_during_feed_outage_and_honors_unsubscribe(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -111,7 +111,7 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError, "feed down"):
                 await monitor.check_once()
             self.assertEqual(sender.call_args.args[2], ["b"])
-            self.assertEqual(monitor.pending, {})
+            self.assertEqual(monitor.pending_posts, {})
 
     async def test_companion_partial_delivery_keeps_original_image_after_reload(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -119,6 +119,7 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
             image = path / "capture.png"
             image.write_bytes(b"original-news")
             plugin = HelldiversPlugin.__new__(HelldiversPlugin)
+            plugin._prune_push_subscriptions = AsyncMock()
             monitor = CompanionNewsMonitor(path / "state")
             monitor.subscribe("a")
             monitor.subscribe("b")
@@ -136,7 +137,7 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
             texts[0] = "New article"
             await plugin._check_companion_news_change(image)
             fingerprint = news_fingerprint(texts)
-            self.assertEqual(monitor.pending[fingerprint], ["b"])
+            self.assertEqual(monitor.pending_news[fingerprint].sessions, ["b"])
             image.write_bytes(b"another-news")
             plugin.companion_news_monitor = CompanionNewsMonitor(path / "state")
             observed = []
@@ -148,8 +149,8 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
             plugin._push_companion_news = AsyncMock(side_effect=send)
             await plugin._deliver_pending_companion_news()
             self.assertEqual(observed, [(b"original-news", ["b"])])
-            self.assertEqual(plugin.companion_news_monitor.pending, {})
-            self.assertFalse(monitor.pending_image(fingerprint).exists())
+            self.assertEqual(plugin.companion_news_monitor.pending_news, {})
+            self.assertFalse(monitor.pending_image_path(fingerprint).exists())
             await plugin._check_companion_news_change(image)
             self.assertEqual(plugin._push_companion_news.await_count, 1)
 
@@ -159,21 +160,22 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
             image = path / "source.png"
             monitor = CompanionNewsMonitor(path / "state")
             monitor.subscribe("a")
+            monitor.commit_fingerprint("baseline")
             for fingerprint in ("v2:first", "v2:second"):
                 image.write_bytes(fingerprint.encode())
-                await monitor.enqueue(fingerprint, image)
+                await monitor.queue_news(fingerprint, image)
             monitor.unsubscribe("a")
             monitor.subscribe("a")
             restored = CompanionNewsMonitor(path / "state")
-            self.assertEqual(restored.pending, {})
-            self.assertEqual(list(restored.data_dir.glob("pending_*.png")), [])
-            for fingerprint in list(restored.pending):
-                restored.finish_pending(fingerprint)
-            self.assertEqual(restored.pending, {})
+            self.assertEqual(restored.pending_news, {})
+            self.assertEqual(list(restored.outbox_dir.glob("*.png")), [])
+            restored.prune_pending()
+            self.assertEqual(restored.pending_news, {})
 
     async def test_companion_stale_image_is_not_queued(self):
         with tempfile.TemporaryDirectory() as tmp:
             plugin = HelldiversPlugin.__new__(HelldiversPlugin)
+            plugin._prune_push_subscriptions = AsyncMock()
             monitor = CompanionNewsMonitor(Path(tmp))
             monitor.subscribe("a")
             monitor.check_fingerprint(news_fingerprint(["Old article"]))
@@ -183,7 +185,7 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
             plugin._served_companion_stale = lambda _: True
             plugin._push_companion_news = AsyncMock()
             await plugin._check_companion_news_change(Path(tmp) / "stale.png")
-            self.assertEqual(monitor.pending, {})
+            self.assertEqual(monitor.pending_news, {})
             self.assertEqual(monitor.last_fingerprint, news_fingerprint(["Old article"]))
             plugin._push_companion_news.assert_not_awaited()
 
@@ -291,7 +293,7 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
         plugin.companion_backend = "playwright"
         plugin.companion_playwright = object()
         plugin.config = {"companion_warmup_kinds": "station"}
-        plugin.companion_news_monitor = SimpleNamespace(subscribe=lambda _: True)
+        plugin.companion_news_monitor = SimpleNamespace(subscribe=lambda _: True, _state_error="")
         plugin._companion_warmup_task = asyncio.create_task(asyncio.sleep(0))
         await plugin._companion_warmup_task
         event = SimpleNamespace(plain_result=lambda t: t, unified_msg_origin="a")

@@ -194,14 +194,17 @@ class DionathaIndexTests(unittest.TestCase):
                 self.assertTrue(results)
                 self.assertEqual(results[0]["id"], "dionatha:ar-11-arbitrator")
 
-    def test_hd2tool_items_win_key_collisions(self) -> None:
+    def test_hd2tool_names_survive_supplement_merge(self) -> None:
         client = self._client()
         hd2 = {"id": "ar-11-arbitrator", "nameEn": "AR-11 Arbitrator",
                "nameZh": "仲裁者", "productKind": "primary-weapon"}
         client._items = [hd2]
         client._build_index()
         results = client.search("AR-11 Arbitrator")
-        self.assertEqual(results[0], hd2)
+        self.assertEqual(results[0]["nameZh"], "仲裁者")
+        self.assertEqual(results[0]["id"], hd2["id"])
+        self.assertEqual(results[0]["_source"], "merged")
+        self.assertIn("combat", results[0])
 
 
 if __name__ == "__main__":

@@ -197,8 +197,8 @@ class BilibiliMonitorTests(unittest.IsolatedAsyncioTestCase):
             async def close(self):
                 self.closed = True
 
-        async def send_post(post, image_paths, sessions) -> None:
-            return None
+        async def send_post(post, image_paths, sessions) -> int:
+            return 0
 
         with tempfile.TemporaryDirectory() as tmp:
             image_path = Path(tmp) / "safe.png"
@@ -234,8 +234,8 @@ class BilibiliMonitorTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(image_cache.closed)
 
     async def test_risk_control_message_requires_login_cookie(self) -> None:
-        async def send_post(post, image_paths, sessions) -> None:
-            return None
+        async def send_post(post, image_paths, sessions) -> int:
+            return 0
 
         with tempfile.TemporaryDirectory() as tmp:
             monitor = BilibiliMonitor(
@@ -270,8 +270,9 @@ class BilibiliMonitorTests(unittest.IsolatedAsyncioTestCase):
             ],
         ]
 
-        async def send_post(post, image_paths, sessions) -> None:
+        async def send_post(post, image_paths, sessions) -> int:
             sent.append(post.dynamic_id)
+            return len(sessions)
 
         with tempfile.TemporaryDirectory() as tmp:
             monitor = BilibiliMonitor(
@@ -307,8 +308,8 @@ class BilibiliMonitorTests(unittest.IsolatedAsyncioTestCase):
             assert latest is not None
             self.assertEqual(latest.dynamic_id, "6")
 
-            self.assertEqual(await monitor.check_once(), 0)
             self.assertTrue(monitor.subscribe("aiocqhttp:GroupMessage:123"))
+            self.assertEqual(await monitor.check_once(), 0)
             self.assertEqual(await monitor.check_once(), 1)
             self.assertEqual(sent, ["4"])
             self.assertFalse(monitor.subscribe("aiocqhttp:GroupMessage:123"))

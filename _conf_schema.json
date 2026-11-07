@@ -25,7 +25,7 @@
   "api_user_agent": {
     "description": "User-Agent",
     "type": "string",
-    "default": "astrbot_plugin_Helldivers/1.10.3"
+    "default": "astrbot_plugin_Helldivers/2.0.0"
   },
   "api_timeout": {
     "description": "API 请求超时（秒）",
@@ -249,9 +249,9 @@
     "default": "https://uapis.cn/api/v1/ai/translate"
   },
   "translation_api_key": {
-    "description": "翻译 API Key（openai 模式）",
+    "description": "翻译 API Key",
     "type": "text",
-    "hint": "OpenAI 兼容接口的 Bearer Token；builtin 模式可留空",
+    "hint": "Bearer Token；OpenAI 兼容接口和 UApi builtin 均支持，留空使用供应商游客额度",
     "obvious_hint": true,
     "default": ""
   },
@@ -293,7 +293,7 @@
   "translation_error_cooldown_seconds": {
     "description": "翻译接口错误冷却时间（秒）",
     "type": "int",
-    "hint": "OpenAI 兼容接口返回 429/567/5xx 后暂停翻译请求，避免拥塞时连续漏翻",
+    "hint": "翻译接口返回限流或服务异常后暂停请求；UApi 月额度耗尽至少暂停一小时，避免拥塞时连续漏翻",
     "default": 120
   },
   "translation_min_interval_seconds": {
@@ -487,5 +487,29 @@
     "type": "int",
     "hint": "低于该在线人数的进攻星球会折叠为「低影响星球」汇总，默认 800",
     "default": 800
+  },
+  "push_pending_max_entries": {
+    "description": "每个推送来源的待补发条数上限",
+    "type": "int",
+    "default": 100,
+    "hint": "达到上限时清理最早记录并输出原因；至少 1 条。"
+  },
+  "push_pending_retention_days": {
+    "description": "待补发记录保留天数",
+    "type": "int",
+    "default": 7,
+    "hint": "超过期限不再补发并记录清理原因；至少 1 天。"
+  },
+  "push_pending_image_max_mb": {
+    "description": "Companion 待补发截图总容量（MiB）",
+    "type": "int",
+    "default": 128,
+    "hint": "超过预算清理最早待补发截图；迁移备份与历史截图另行保留。"
+  },
+  "push_retry_base_seconds": {
+    "description": "重复推送失败后的退避基数（秒）",
+    "type": "int",
+    "default": 60,
+    "hint": "首次失败在下轮轮询重试；再次失败后指数退避，最多 1 小时。"
   }
 }

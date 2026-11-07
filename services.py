@@ -603,6 +603,7 @@ class HelldiversService:
             if (
                 cached_text == original
                 and self.drop_untranslated_content
+                and not self._translation_rate_limited()
                 and _has_translatable_english(original)
             ):
                 return ""
@@ -1086,6 +1087,7 @@ class HelldiversService:
             if (
                 cached_text == extract
                 and self.drop_untranslated_content
+                and not self._translation_rate_limited()
                 and _has_translatable_english(extract)
             ):
                 return ""
@@ -1133,9 +1135,7 @@ class HelldiversService:
         """数据库查询（装备 + 敌人）。返回图片路径列表；文案提示时返回 str。"""
         if self.arsenal_client is None:
             return "❌ 数据库功能未启用。"
-        loaded = await self.arsenal_client.ensure_loaded()
-        if not loaded:
-            return "❌ 装备数据加载失败（下载失败且无本地缓存），请稍后重试。"
+        await self.arsenal_client.ensure_loaded()
         # 敌人数据独立加载，失败不影响装备查询
         try:
             await self.arsenal_client.ensure_enemies()
@@ -1148,6 +1148,13 @@ class HelldiversService:
         )
 
         results = self.arsenal_client.search(query)
+        if not results:
+            await self.arsenal_client.wait_for_supplement()
+            results = self.arsenal_client.search(query)
+        if not results and self.arsenal_client._dionatha_task is not None and not self.arsenal_client._dionatha_task.done():
+            return "⏳ 装备目录正在同步，请稍后重试查询。"
+        if not self.arsenal_client.available:
+            return "❌ 暂无可用装备或敌人缓存，上游请求失败，请稍后重试。"
         if not results:
             card = build_arsenal_candidates_card(query, [])
             p = await self._render_card(card)
@@ -1344,6 +1351,7 @@ class HelldiversService:
                 return cached_text
             if (
                 allow_source_fallback
+                or self._translation_rate_limited()
                 or not self.drop_untranslated_content
                 or not _has_translatable_english(text)
             ):
@@ -1715,15 +1723,35 @@ class HelldiversService:
             self._station_with_planet(state),
             include_actions=False,
         )
-        return format_dss_message(station)
+        entry = await self.cache.get_entry(self.CACHE_SPACE_STATIONS)
+        if entry is None:
+            return "❌ DSS 数据请求失败，当前没有可用缓存。"
+        from datetime import datetime, timezone
+        timestamp = datetime.fromtimestamp(entry.updated_at, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        stale = not await self.cache.is_fresh(self.CACHE_SPACE_STATIONS)
+        note = "旧缓存，上游暂未刷新" if stale else "数据时间"
+        return f"{format_dss_message(station)}\n{note}：{timestamp}"
 
     async def get_dss_image(self) -> list[Path]:
         state = await self._build_war_state()
         station = await self._prepare_dss_station(self._station_with_planet(state))
+        entry = await self.cache.get_entry(self.CACHE_SPACE_STATIONS)
+        if entry is None:
+            card = build_dss_card(None)
+            card.text("上游请求失败，当前没有可用缓存。")
+            path = await self._render_card(card)
+            return [path] if path else []
+        from datetime import datetime, timezone
+        stamp = datetime.fromtimestamp(entry.updated_at, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        stale = not await self.cache.is_fresh(self.CACHE_SPACE_STATIONS)
+        note = f"{'旧缓存' if stale else '数据时间'}：{stamp}"
+        if station is not None:
+            station["_cache_note"] = note
         if self.dss_renderer is not None:
             p = await asyncio.to_thread(self.dss_renderer.render, station)
             return [p] if p else []
         card = build_dss_card(station)
+        card.text(note, muted=True)
         p = await self._render_card(card)
         return [p] if p else []
 

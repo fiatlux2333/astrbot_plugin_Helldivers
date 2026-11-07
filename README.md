@@ -1,8 +1,19 @@
 # 绝地潜兵2情报助手 (astrbot_plugin_Helldivers)
 
-基于 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 的《绝地潜兵2》银河战争情报插件，当前版本 `v1.10.3`。
+基于 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 的《绝地潜兵2》银河战争情报插件，当前版本 `v2.0.0`。
 
 数据来源：Helldivers 2 Community API、Helldivers Companion、Steam News API、helldivers.wiki.gg。常规情报由 Pillow 渲染为中文卡片；`/hd2news`、`/dss`、`/planet`、`/companion` 通过 Playwright 截取 Companion 网页并做术语级中文翻译。内置双层缓存、请求限流重试、官方译名词表（569 条）预替换与 AI 翻译（内置接口或 OpenAI 兼容接口）；翻译提示词实质性改版时通过协议指纹（当前 v4）自动失效旧翻译缓存。
+
+## v2.0.0 更新（2026-11-07）
+
+- `/map` 默认参考底图同步为用户于 2026-11-07 提供的最新素材，原样保留 1280×1280 RGBA PNG；素材校验值与缓存指纹同步更新。
+- 插件元数据、运行时版本和默认 User-Agent 统一为 `2.0.0`；本次审查修复继续保持该版本号，推送状态自动迁移到带备份的 v3 格式。
+- 修复旧队列迁移、相对时间导致的重复推送、翻译缓存并发覆盖、API 跨源请求头和 local 模式命令路由；失败推送增加保留边界及退避。
+- 保留远端 main 的新闻预热自动加入、浏览器就绪检查、结束任务重启、异常内存记录隔离，以及主目录缺失别名时的刷新与退避。
+- 装备目录/别名、护甲/被动关联数据使用原子快照；修复坏目录覆盖、关联 ID 更新卡住、原样译文误暂停以及同类别候选无法唯一选择。
+- 延续本地 v1.10.5 的装备整合、翻译降级、退群订阅清理等功能。安装、迁移与验收见 [v2.0.0 发布说明](docs/RELEASE_2.0.0.md)。
+
+**版本范围：** 本版本在远端 main 的既有修复上整合本地 v1.10.5 开发线，已针对性整合稳定指纹、翻译缓存写盘、API 请求头隔离和 local 路由修复；没有整体合并 `codex`，Jerry 地图和静态中文 Wiki 等独有功能仍不包含。已支持迁移远端 main `cdcd162` / codex `920cf48` 的 `pending` 队列，以及本地 v1.10.3～原 v2.0.0 的队列格式。迁移前保留原状态备份，旧截图也保留；超过配置期限/容量的记录按保留策略清理，未知或损坏状态会暂停该推送通道并保留原文件。
 
 ## 指令
 
@@ -21,10 +32,13 @@
 /steam                             Steam 官方更新
 /wiki <关键词> [-f]                Wiki 查询；-f 返回全文；中文自动按官方译名搜索
 /hd2data <名称>                    军需簿：武器/护甲/敌人（支持俗称如电喷/泰坦）
+/hd2data刷新                       刷新装备与敌人目录（AstrBot 管理员）
 /hd2refresh 或 /刷新缓存            强制刷新 Companion 截图缓存
+/hd2翻译恢复                       解除翻译暂停（AstrBot 管理员）
 /hd2ping 或 /诊断 /自检             自诊断：数据源健康、缓存年龄、关键配置
 /银河快报 / /galaxy_news            获取最近一期银河快报
 /银河快报订阅 / /银河快报退订        当前群推送开关
+/hd2订阅列表                       查看推送订阅及待补发数量（AstrBot 管理员）
 /hd2                               简短帮助
 /hd2help 或 /hdhelp                全部指令说明
 ```
@@ -34,24 +48,49 @@
 行为说明：
 
 - Companion 截图翻译降级顺序：全中文 → 最近翻译快照（2 小时内）→ 部分翻译 → 英文截图，翻译异常不会导致命令报错；后台每 5 分钟预热页面，正常请求直接返回缓存截图。
-- 群订阅（`/hd2news订阅`、`/银河快报订阅`）按动态/新闻 ID 持久化去重，首次订阅只记录基线，不补发历史内容；推送包含正文、图片与原动态出处。
-- 推送按群记录投递进度，部分群失败时只重试失败群，重载后继续处理待投递内容；Companion 新闻指纹忽略相对时间标签，并保存待投递截图。升级指纹算法后首次采集重新建立基线，不补发旧新闻。
-- 两类推送的待投递队列各保留最多 100 条、最长 7 天；Companion 待投递截图合计最多 128 MiB。超限时按入队时间丢弃最旧内容并记录警告，过期内容不再补发，订阅关系不受影响；重载时也会清理过期队列与无引用截图。
-- 开启 Companion 新闻推送后，后台会自动加入 `news_latest` 检测目标，即使 `companion_warmup_kinds` 只配置了其他页面；截图客户端未就绪时不会接受新订阅。
-- `/hd2data` 装备数据来自开源 HD2Tool（MIT），敌人数据来自 helldivers.wiki.gg，首次使用自动下载，24 小时检查更新；HD2Tool 未收录的新装备/新债券内容由 wiki.gg 补充目录（[dionatha API](https://helldivers-api.dionatha.com.br/)，每日同步，CC BY-NC-SA 4.0）兜底，卡片底部标注数据来源与版本。
+- 群订阅（`/hd2news订阅`、`/银河快报订阅`）持久化保存已发现内容及各群待补发状态；首次监听只记录基线，新订阅群不会收到已有队列中的历史内容。成功群立即确认送达，失败群在后续轮询/预热时按退避补发；重启后继续保留未确认目标，补发受下述保留期限和容量限制。银河快报推送包含正文、图片与原动态出处。
+- QQ 的 OneBot v11 连接（如 SnowLuma）在推送前查询最新群列表并确认账号在线，自动清理已退出群的订阅和待补发记录。群列表查询失败、账号离线或平台停用时保留订阅。
+- `/hd2data` 保留 HD2Tool（MIT）的中文名与俗称，按装备类别和稳定标识合并 [dionatha API](https://helldivers-api.dionatha.com.br/) 的 wiki.gg 数据（CC BY-NC-SA 4.0）；分别显示基础/升级条件、热量机制和数据来源。默认24小时检查更新；部分集合失败时保留旧缓存。同名护甲/头盔可加类别查询，例如 `/hd2data A-35 Recon 头盔`。敌人数据仍来自 wiki.gg，未经核实的新敌人译名保留英文。
+- `/map` 的 `map_visual_mode=uploaded_reference` 使用随包参考图，实时状态由 API 数据叠加；参考图本身是人工同步素材。`derived` 模式使用程序化绘图，不使用这张参考图。
+- `companion_backend=local` 时，`/dss`、`/planet` 直接使用 Pillow 本地卡片，无需启动截图浏览器。
 - `/planet` 支持中文名、编号、英文 slug 与 Companion 链接；仅允许访问 `helldiverscompanion.com` 的固定路由，无任意网页截图。
+
+## v1.10.5 更新
+
+- 统一军需簿记录：中文名/俗称继续有效，新数值按类别合并；护甲与头盔不会因同名相互覆盖。
+- 基础/全升级冷却、呼叫时间分别展示；保留有效零值、未知值、热量武器机制、霰弹弹丸数量及明确的持续伤害单位。
+- `/hd2data刷新` 合并并发刷新请求；`/hd2ping` 展示各集合版本、下载时间、部分失败状态及来源差异数量。
+- 改进缓存校验、被动表依赖和任务清理；错误响应不会覆盖有效装备缓存，源数据过期时卡片显示旧缓存时间。
+- 包含本地开发线的 v1.10.4 与推送修复；与远端同名 v1.10.3 的实现存在差异。历史交付说明与兼容性更正见 [v1.10.5 说明](docs/RELEASE_1.10.5.md)。
+
+## v1.10.4 更新
+
+- 装备补充目录按集合保留最后成功缓存；部分更新失败、重启和主目录不可达时仍可使用已有数据。
+- 翻译 builtin 支持限流、额度不足和网络故障降级；保留原文，管理员可用 `/hd2翻译恢复` 解除暂停。
+- 修正 Companion 按 ID 新闻的战争时间换算；移除已经失效的 DSS v1 回退，DSS 文本显示缓存时间。
+- 包含此前本地推送修复。仅在兼容的数据格式间升级时沿用待补发队列；当时尚未支持远端 main/codex 的 `pending` 格式；当前 v2.0.0 审查修复版已加入带备份迁移。
+
+UApi builtin 翻译当前按额度提供服务：AI 翻译4积分/次，游客按出口IP共享1500积分/月。普通限流按 `Retry-After` 冷却；额度不足至少暂停一小时，保留已有译文或原文。充值或调整配置后，管理员可用 `/hd2翻译恢复` 允许下一次请求。该命令不会自动充值，也不清空已成功翻译的缓存。
+
+
+### 推送保留与恢复
+
+| 配置 | 默认 | 行为 |
+|---|---|---|
+| `push_pending_max_entries` | `100` | 每个来源最多保留 100 条待补发记录，超出后清理最早项 |
+| `push_pending_retention_days` | `7` | 超过 7 天的记录不再补发，日志注明清理原因 |
+| `push_pending_image_max_mb` | `128` | Companion 活动待补发截图最多 128 MiB，超出后清理最早项 |
+| `push_retry_base_seconds` | `60` | 首次失败下轮重试；再次失败按 60 秒起指数退避，最多 1 小时 |
+
+这些边界用于限制长期发送失败时的积压；清理记录意味着放弃该条后续补发。迁移备份 `state.before-v3.<摘要>.json` 与旧 `pending_*.png` 留作回滚，不计入活动队列预算，确认升级后可自行归档。`/hd2订阅列表` 与 `/hd2ping` 会提示状态保护；遇到未知格式或缺失的旧截图，先修复文件或恢复备份，再重载插件，不要直接清空数据目录。
 
 ## 安装
 
-### 环境要求
+### 本地 v2.0.0 ZIP
 
-- AstrBot `>=4.16,<5`，Python `>=3.11`（使用 `asyncio.timeout`）。
-- Python 依赖：`aiohttp>=3.10.0`、`Pillow>=10.0.0`、`playwright>=1.50.0`。请在运行 AstrBot 的同一 Python 环境中安装；无需将 AstrBot 本体加入插件的 `requirements.txt`。
-- 默认使用 Playwright 截图。安装 Python 包不会自动安装 Chromium，仍需按下文安装浏览器及 Linux 系统库，并安装中文字体。
-- 无浏览器环境可将 `companion_render_backend` 设为 `local`，使用本地数据卡片；`/companion` 网页截图及 Companion 新闻订阅需要 Playwright。
-- 需要访问社区 API、Companion、Steam、Wiki 与装备数据镜像；网络受限时配置 `proxy_url`。B 站监听还需配置有效登录 Cookie，翻译密钥按所选翻译服务填写，均不要提交到仓库。
+本次产物为 `dist/astrbot_plugin_Helldivers-v2.0.0.zip`，同时提供通用文件名 `dist/astrbot_plugin_Helldivers.zip`。同版本审查修复包仍显示 v2.0.0，请以 `dist/manifest.json` 中的 SHA-256 区分旧包。通过 AstrBot WebUI 的本地 ZIP 更新入口安装后重载，执行 `/hd2ping`、`/hd2订阅列表` 确认状态，再执行 `/map` 检查新素材。源码同步于 GitHub `main`；运行 `bash pack.sh` 可生成安装包和校验清单。插件市场是否刷新到当前提交取决于市场缓存，本次不单独创建 GitHub Release。
 
-### 插件市场（推荐）
+### 插件市场
 
 在 AstrBot WebUI 插件市场搜索 `astrbot_plugin_Helldivers` 或 `绝地潜兵2情报助手`，安装并启用。
 
@@ -61,10 +100,10 @@
 cd AstrBot/data/plugins
 git clone https://github.com/fiatlux2333/astrbot_plugin_Helldivers
 cd astrbot_plugin_Helldivers
-python -m pip install -r requirements.txt
+pip install -r requirements.txt
 ```
 
-### Chromium 浏览器与系统库（截图功能必需）
+### Chromium 系统库（截图功能必需）
 
 Playwright 的 Chromium 需要系统依赖库，缺失时报 `Host system is missing dependencies` 或截图超时：
 
@@ -72,18 +111,13 @@ Playwright 的 Chromium 需要系统依赖库，缺失时报 `Host system is mis
 # 需要 root
 python -m playwright install --with-deps chromium
 
-# Debian / Ubuntu 手动安装系统库（仍需 root 或 sudo）
+# 无 root 权限时手动安装
 apt update && apt install -y \
     libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 \
     libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
     libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 \
     libasound2 libatspi2.0-0
-
-# 已安装系统库后，以运行 AstrBot 的用户安装浏览器
-python -m playwright install chromium
 ```
-
-Windows / macOS 在 AstrBot 使用的 Python 环境中执行 `python -m playwright install chromium`。Linux 无管理员权限且缺少系统库时，需要管理员安装依赖，或使用 `local` 后端。
 
 AstrBot 在 Docker 容器（名为 `astrbot`）中时：
 
@@ -124,7 +158,7 @@ Windows / macOS 一般自带中文字体，无需安装。
 
 默认 `companion_render_backend=playwright`，在 AstrBot 容器内截图并翻译，无需额外服务。可选值：
 
-- `local`：`/hd2news`、`/dss`、`/planet` 不用浏览器，返回 Pillow 中文数据卡片；`/companion` 首页仍需网页截图后端。
+- `local`：不用浏览器，返回 Pillow 中文数据卡片。
 - `browserless`：远程截图服务，无法调用插件翻译器，仅关闭翻译时返回英文网页截图。AstrBot 在 Docker 中时：
 
 ```bash
@@ -187,7 +221,7 @@ OpenAI 兼容配置示例：
 
 OpenAI 兼容模式按每批 16 条并行翻译 Companion 页面片段；遇到 500/502/503/504 等 2 秒后重试一次，429 或网关错误进入短冷却，失败结果不会长期污染翻译缓存。
 
-翻译链路对限流配额有完整韧性设计：Steam 卡片批量送译（一张卡 3~4 个请求而非逐段 20+）；429/超时等瞬态失败期间保留英文原文兜底、不写失败缓存，接口恢复后由后台轮转自动补翻；只有模型确认返回且译文等于原文才判定为持久失败。翻译缓存为内存 + 磁盘双层，写盘经去抖合并且有 4096 条容量上限。
+翻译链路对限流配额有完整韧性设计：Steam 卡片批量送译（一张卡 3~4 个请求而非逐段 20+）；429/超时等瞬态失败期间保留英文原文兜底、不写失败缓存，接口恢复后由后台轮转自动补翻；有效响应中的原样译文不会触发提供方全局故障窗口，上层可按片段重试。翻译缓存为内存 + 磁盘双层，写盘经去抖合并、串行原子替换，取消/卸载会等待已开始的写入，且有 4096 条容量上限。
 
 ### 银河快报
 
@@ -198,10 +232,22 @@ OpenAI 兼容模式按每批 16 条并行翻译 Companion 页面片段；遇到 
 | `bilibili_keyword` | string | `银河快报` | 动态正文匹配关键词 |
 | `bilibili_poll_interval` | int | `300` | 轮询间隔（秒），最低 60 |
 | `bilibili_cookie` | text | `""` | 登录后的完整 B站 Cookie，须含 `SESSDATA` |
-| `bilibili_image_max_bytes` | int | `12582912` | 单张图片最大字节数 |
-| `bilibili_image_max_pixels` | int | `32000000` | 长图最大解码像素 |
+| `bilibili_image_max_bytes` | int | `16777216` | 单张图片最大字节数 |
+| `bilibili_image_max_pixels` | int | `64000000` | 长图最大解码像素 |
 
 Cookie 是登录凭据，不要发给他人或提交到仓库。若登录验证通过但动态接口返回 `-412`，可尝试通过 `proxy_url` 更换网络出口。
+
+管理员可在私聊或其他群管理旧订阅：
+
+```text
+/hd2订阅列表
+/银河快报退订 <群号或完整群会话标识>
+/hd2news退订 <群号或完整群会话标识>
+```
+
+指定群号只操作当前平台实例，跨平台退订请使用列表中的完整会话标识（`平台ID:GroupMessage:会话ID`）。不指定目标时仍退订当前群；退订会删除该群的待补发记录。指定目标和查看列表需要 AstrBot 管理员权限。
+
+银河快报的待补发队列保存在插件数据目录的 `bilibili_galaxy_news/state.json`，即使动态离开 B 站接口返回范围仍可补发。Companion 新闻在 `companion_news/outbox/` 保存对应截图副本，全部目标送达或退订后删除；关闭新闻推送开关会暂停已有队列。新版本自动兼容正式版旧订阅文件，无需删除数据目录。
 
 ### Companion 网页截图
 
@@ -218,7 +264,7 @@ Cookie 是登录凭据，不要发给他人或提交到仓库。若登录验证�
 | `companion_translation_timeout` | float | `60` | 前台翻译等待（秒），超时返回部分翻译、后台继续 |
 | `companion_translation_batch_timeout` | float | `20` | 单批翻译等待（秒） |
 | `companion_screenshot_cache_ttl` | int | `300` | 截图缓存时长（秒） |
-| `companion_screenshot_max_bytes` | int | `12582912` | 单张截图最大字节数 |
+| `companion_screenshot_max_bytes` | int | `16777216` | 单张截图最大字节数 |
 | `companion_screenshot_max_pixels` | int | `20000000` | 单张截图最大像素 |
 | `companion_show_inactive` | bool | `false` | `/companion` 显示更多战役卡片（约 +1.5s，会持久化到网站） |
 | `companion_warmup_enabled` | bool | `true` | 后台定时预热翻译 |
@@ -246,7 +292,7 @@ Cookie 是登录凭据，不要发给他人或提交到仓库。若登录验证�
 5. `companion_screenshot_cache_ttl` 建议与 `companion_warmup_interval` 保持一致（默认均 300 秒）。
 6. AstrBot 4.26.x 热重载可能残留旧 handler 导致重复回复，插件已内置兼容包装器，完整重启可彻底清理。
 7. 官方译名词表在 `assets/glossary/*.json`，修改后需重载插件。
-8. 军需簿数据缓存在插件数据目录 `arsenal/`，删除该目录后，下次允许下载时会重新获取。装备目录或 wiki.gg 下载失败时分别进入 15 分钟退避，期间优先使用已有数据，避免每次查询重复等待镜像超时。
+8. 军需簿数据缓存在插件数据目录 `arsenal/`，删除该目录可强制重新下载；wiki.gg 下载失败时进入 15 分钟退避，期间装备查询不受影响。
 9. Pillow 或中文字体缺失时，图片可能无法生成或中文显示为方框。
 10. 银河快报转载保留原动态出处，请遵守原作者的转载要求。
 

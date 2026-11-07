@@ -63,11 +63,13 @@ from .renderers.dss_renderer import DSSRenderer
 from .renderers.global_event_renderer import GlobalEventRenderer
 from .renderers.major_order_renderer import MajorOrderRenderer
 from .renderers.map_renderer import MapRenderer
+from .core.push_policy import PushPolicy
 from .core.plugin_info import (
     PLUGIN_NAME,
     PLUGIN_VERSION,
     USER_AGENT,
 )
+from .core.push import QQGroupSubscriptionChecker, group_session, subscription_targets
 from .clients.remote_image_cache import RemoteImageCache
 from .services import HelldiversService
 from .renderers.stats_renderer import StatsRenderer
@@ -126,6 +128,7 @@ HDHELP_TEXT = f"""\
 /dss                  民主空间站面板+摘要
 /planet <名称/编号>   星球详情（支持中文名和链接）
 /hd2refresh           强制刷新截图缓存
+/hd2翻译恢复          解除翻译暂停（管理员）
 
 【地图与战线】
 /map                  银河战争地图
@@ -136,8 +139,10 @@ HDHELP_TEXT = f"""\
 /steam                Steam 更新公告
 /wiki <关键词>        Wiki 查询（中文自动译名；加 -f 看全文）
 /hd2data <名称>       军需簿：武器/护甲/敌人（俗称：电喷/泰坦）
+/hd2data刷新          刷新装备及敌人目录（管理员）
 /银河快报             最新一期快报
 /银河快报订阅 / 退订   群推送开关
+/hd2订阅列表           查看推送订阅（管理员）
 
 【帮助】
 /hd2                  简短帮助
@@ -225,6 +230,7 @@ class HelldiversPlugin(Star):
         self._companion_warmup_task: asyncio.Task | None = None
         self.companion_news_monitor: CompanionNewsMonitor | None = None
         self._companion_news_push_enabled = False
+        self._push_session_checker = QQGroupSubscriptionChecker(context)
 
     def _cfg(self, key: str, default: Any = None) -> Any:
         if self.config is None:
@@ -545,6 +551,12 @@ class HelldiversPlugin(Star):
                 GALAXY_NEWS_UID,
             )
             configured_bilibili_uid = GALAXY_NEWS_UID
+        push_policy = PushPolicy(
+            max_entries=max(1, int(self._cfg("push_pending_max_entries", 100) or 100)),
+            ttl_seconds=max(1, int(self._cfg("push_pending_retention_days", 7) or 7)) * 86400,
+            max_image_bytes=max(1, int(self._cfg("push_pending_image_max_mb", 128) or 128)) * 1024 * 1024,
+            retry_base_seconds=max(1, int(self._cfg("push_retry_base_seconds", 60) or 60)),
+        )
         self.bilibili_monitor = BilibiliMonitor(
             data_dir / "bilibili_galaxy_news",
             uid=configured_bilibili_uid,
@@ -560,6 +572,8 @@ class HelldiversPlugin(Star):
             send_post=self._send_bilibili_post,
             log_info=logger.info,
             log_warning=logger.warning,
+            before_check=self._prune_push_subscriptions,
+            policy=push_policy,
             image_cache=RemoteImageCache(
                 data_dir / "bilibili_galaxy_news" / "secure_images_v3",
                 allowed_hosts=frozenset(
@@ -620,7 +634,7 @@ class HelldiversPlugin(Star):
             )
         logger.info(f"[HD2] plugin initialized {PLUGIN_VERSION}, data_dir={data_dir}")
         self.companion_news_monitor = CompanionNewsMonitor(
-            data_dir / "companion_news"
+            data_dir / "companion_news", policy=push_policy
         )
         self._companion_news_push_enabled = bool(
             self._cfg("companion_news_push_enabled", False)
@@ -701,7 +715,7 @@ class HelldiversPlugin(Star):
                         "[HD2] Companion 预热完成: %s", target.kind
                     )
                     if target.kind == "news_latest":
-                        await self._check_companion_news_change(path)
+                        await self._check_companion_news_change(path, retry_pending=False)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001 - background warmup
@@ -717,20 +731,47 @@ class HelldiversPlugin(Star):
                 await asyncio.sleep(5)
             await asyncio.sleep(interval)
 
-    async def _check_companion_news_change(self, path: Path) -> None:
+    async def _prune_push_subscriptions(self) -> None:
+        """Remove retired QQ groups from both subscriptions and their outboxes."""
+        monitors = [
+            monitor
+            for monitor in (
+                getattr(self, "bilibili_monitor", None),
+                getattr(self, "companion_news_monitor", None),
+            )
+            if monitor is not None
+        ]
+        sessions = list(
+            dict.fromkeys(origin for monitor in monitors for origin in monitor.sessions)
+        )
+        checker = getattr(self, "_push_session_checker", None)
+        if checker is None:
+            checker = QQGroupSubscriptionChecker(self.context)
+            self._push_session_checker = checker
+        removed = await checker.removed_sessions(sessions)
+        for origin in removed:
+            for monitor in monitors:
+                if not monitor._state_error:
+                    monitor.unsubscribe(origin)
+            logger.info("[HD2] 已清理退出的 QQ 群推送订阅: session=%s", origin)
+
+    async def _check_companion_news_change(self, path: Path, *, retry_pending: bool = True) -> None:
         """Detect news content changes via fingerprint and push to subscribers.
 
         Called from the warmup loop after each ``news_latest`` capture with
         the screenshot path already in hand — no second capture needed.
-        Each update is durably queued with its image and recipient list before
-        advancing the fingerprint. Failed recipients are retried separately.
+        Save each update and its recipient list before sending. Successful
+        groups are acknowledged individually; failed groups keep their snapshot.
         """
         monitor = self.companion_news_monitor
         if monitor is None:
             return
+        await self._prune_push_subscriptions()
         client = self.companion_playwright
         if client is None:
             return
+        if self._companion_news_push_enabled and retry_pending:
+            await monitor.retry_pending(self._push_companion_news)
         texts = client.capture_texts("news_latest")
         if not texts:
             return
@@ -758,31 +799,22 @@ class HelldiversPlugin(Star):
                 "本轮跳过推送，下一轮重试"
             )
             return
-        await monitor.enqueue(fingerprint, path)
-        await self._deliver_pending_companion_news()
+        try:
+            queued = await monitor.queue_news(fingerprint, path)
+        except OSError as exc:
+            logger.warning(
+                "[HD2] Companion 新闻待发送截图保存失败，下一轮重试: %s", exc
+            )
+            return
+        if queued:
+            await monitor.retry_pending(self._push_companion_news, [fingerprint])
 
     async def _deliver_pending_companion_news(self) -> None:
         monitor = self.companion_news_monitor
         if monitor is None or not self._companion_news_push_enabled:
             return
-        monitor.prune_pending()
-        for fingerprint, sessions in list(monitor.pending.items()):
-            for session in list(sessions):
-                if session not in sessions:
-                    continue
-                if session not in monitor.sessions:
-                    monitor.mark_delivered(fingerprint, session)
-                    continue
-                try:
-                    delivered = await self._push_companion_news(
-                        monitor.pending_image(fingerprint), [session]
-                    )
-                except Exception as exc:
-                    logger.warning("[HD2] Companion news retry failed: %s", exc)
-                    continue
-                if delivered:
-                    monitor.mark_delivered(fingerprint, session)
-            monitor.finish_pending(fingerprint)
+        await self._prune_push_subscriptions()
+        await monitor.retry_pending(self._push_companion_news)
 
     async def _push_companion_news(
         self, path: Path, sessions: list[str]
@@ -881,7 +913,7 @@ class HelldiversPlugin(Star):
             )
             return 0
         text = post.text or "（该动态没有文字内容）"
-        # 预读图片字节：AstrBot 容器与 NapCat 宿主机分离部署时，
+        # 预读图片字节：AstrBot 容器与 OneBot 客户端宿主机分离部署时，
         # file:/// 路径跨进程不可读，直接内嵌 base64 绕过文件系统。
         image_bytes: list[bytes] = []
         for path in image_paths:
@@ -1009,26 +1041,90 @@ class HelldiversPlugin(Star):
         if not origin:
             yield event.plain_result("❌ 无法获取当前群会话标识，请检查适配器。")
             return
+        if self.bilibili_monitor._state_error:
+            yield event.plain_result("❌ 推送状态受保护，请管理员通过 /hd2订阅列表 查看并恢复备份后重载。")
+            return
         if self.bilibili_monitor.subscribe(origin):
             yield event.plain_result("✅ 已订阅银河快报，新动态将自动同步到本群。")
         else:
             yield event.plain_result("ℹ️ 本群已经订阅银河快报。")
 
     @filter.command("银河快报退订", alias=["galaxy_news_unsubscribe"])
-    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     @_command_handler
     async def cmd_galaxy_news_unsubscribe(
-        self, event: AstrMessageEvent
+        self, event: AstrMessageEvent, target: str = ""
     ) -> AsyncGenerator[Any, None]:
-        """取消当前群的 B站“银河快报”动态推送。"""
+        """取消当前群订阅；管理员可指定群号或完整群会话标识。"""
         if self.bilibili_monitor is None:
             yield event.plain_result("ℹ️ 银河快报监听当前未启用。")
             return
+        yield event.plain_result(
+            self._unsubscribe_push(self.bilibili_monitor, event, target, "银河快报")
+        )
+
+    def _unsubscribe_push(
+        self,
+        monitor: BilibiliMonitor | CompanionNewsMonitor,
+        event: AstrMessageEvent,
+        target: str,
+        label: str,
+    ) -> str:
+        if monitor._state_error:
+            return "❌ 推送状态受保护；请通过 /hd2订阅列表 查看原因，恢复备份后重载。"
         origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
-        if origin and self.bilibili_monitor.unsubscribe(origin):
-            yield event.plain_result("✅ 已取消本群的银河快报订阅。")
-        else:
-            yield event.plain_result("ℹ️ 本群尚未订阅银河快报。")
+        if not target.strip():
+            if not event.get_group_id():
+                return "ℹ️ 请在目标群内退订，或由管理员指定群号/完整群会话标识。"
+            key = group_session(origin)
+            targets = [
+                value for value in monitor.sessions
+                if key is not None and group_session(value) == key
+            ]
+            for value in targets:
+                monitor.unsubscribe(value)
+            if targets:
+                return f"✅ 已取消本群的{label}订阅。"
+            return f"ℹ️ 本群尚未订阅{label}。"
+        if not event.is_admin():
+            return "❌ 仅 AstrBot 管理员可以指定群号或会话退订。"
+        try:
+            targets = subscription_targets(monitor.sessions, target, origin)
+        except ValueError as exc:
+            return f"❌ {exc}"
+        for value in targets:
+            monitor.unsubscribe(value)
+        if targets:
+            return f"✅ 已取消 {len(targets)} 个{label}订阅，并清理对应待补发记录。"
+        return f"ℹ️ 没有找到对应的{label}订阅。"
+
+    @filter.command("hd2订阅列表", alias=["push_subscriptions"])
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @_command_handler
+    async def cmd_push_subscriptions(
+        self, event: AstrMessageEvent
+    ) -> AsyncGenerator[Any, None]:
+        """查看银河快报及 Companion 新闻的订阅会话和待补发数量。"""
+        if not event.is_admin():
+            yield event.plain_result("❌ 仅 AstrBot 管理员可以查看订阅列表。")
+            return
+        lines = ["📬 HD2 推送订阅"]
+        for label, monitor, pending in (
+            ("银河快报", self.bilibili_monitor, "pending_posts"),
+            ("Companion 新闻", self.companion_news_monitor, "pending_news"),
+        ):
+            if monitor is None:
+                lines.append(f"\n{label}：未初始化")
+                continue
+            if monitor._state_error:
+                lines.append(f"\n{label}：状态保护已启用，暂停推送；{monitor._state_error}。请修复/恢复备份后重载。")
+                continue
+            lines.append(
+                f"\n{label}：{len(monitor.sessions)} 个订阅，"
+                f"{len(getattr(monitor, pending))} 条待补发"
+            )
+            lines.extend(monitor.sessions or ["（无订阅）"])
+        lines.append("\n管理员可用 /银河快报退订 或 /hd2news退订，后接群号或完整会话标识。")
+        yield event.plain_result("\n".join(lines))
 
     @filter.command("hd2", alias={"helldivers"})
     @_command_handler
@@ -1196,6 +1292,9 @@ class HelldiversPlugin(Star):
         if not origin:
             yield event.plain_result("❌ 无法获取当前群会话标识，请检查适配器。")
             return
+        if monitor._state_error:
+            yield event.plain_result("❌ 推送状态受保护，请管理员通过 /hd2订阅列表 查看并恢复备份后重载。")
+            return
         if monitor.subscribe(origin):
             yield event.plain_result(
                 "✅ 已订阅 Companion 新闻推送，有新新闻时将自动同步到本群。"
@@ -1204,21 +1303,18 @@ class HelldiversPlugin(Star):
             yield event.plain_result("ℹ️ 本群已经订阅 Companion 新闻推送。")
 
     @filter.command("hd2news退订", alias={"news_unsubscribe"})
-    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     @_command_handler
     async def cmd_news_unsubscribe(
-        self, event: AstrMessageEvent
+        self, event: AstrMessageEvent, target: str = ""
     ) -> AsyncGenerator[Any, None]:
-        """取消当前群的 Companion 新闻推送。"""
+        """取消当前群订阅；管理员可指定群号或完整群会话标识。"""
         monitor = self.companion_news_monitor
         if monitor is None:
             yield event.plain_result("ℹ️ Companion 新闻推送当前未启用。")
             return
-        origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
-        if origin and monitor.unsubscribe(origin):
-            yield event.plain_result("✅ 已取消本群的 Companion 新闻推送。")
-        else:
-            yield event.plain_result("ℹ️ 本群尚未订阅 Companion 新闻推送。")
+        yield event.plain_result(
+            self._unsubscribe_push(monitor, event, target, "Companion 新闻")
+        )
 
     @filter.command("companion", alias={"首页", "companion_home"})
     @_command_handler
@@ -1263,6 +1359,27 @@ class HelldiversPlugin(Star):
                 results.append(f"❌ {target.label}（{e}）")
         yield event.plain_result("Companion 缓存刷新完成：\n" + "\n".join(results))
 
+    @filter.command("hd2data刷新")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @_command_handler
+    async def cmd_arsenal_refresh(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
+        """刷新装备与敌人数据，失败的集合继续使用旧缓存。"""
+        arsenal = self._svc().arsenal_client
+        if arsenal is None:
+            yield event.plain_result("❌ 军需簿未启用。")
+            return
+        yield event.plain_result("🔄 正在刷新装备与敌人目录，请稍候…")
+        lines = await arsenal.refresh_all()
+        yield event.plain_result("军需簿刷新结果：\n" + "\n".join(lines))
+
+    @filter.command("hd2翻译恢复")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @_command_handler
+    async def cmd_translation_resume(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
+        """充值或调整翻译配置后，解除错误冷却并允许下一次请求。"""
+        self._svc().translator.resume()
+        yield event.plain_result("✅ 翻译暂停已解除，下次需要翻译时将重新请求。")
+
     @filter.command("hd2ping", alias={"诊断", "自检"})
     @_command_handler
     async def cmd_hd2ping(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
@@ -1294,6 +1411,13 @@ class HelldiversPlugin(Star):
             ),
         ]
 
+        for label, monitor in (("银河快报", self.bilibili_monitor), ("Companion", self.companion_news_monitor)):
+            if monitor is not None and monitor._state_error:
+                info_lines.append(f"{label} 状态受保护，推送暂停；请检查 /hd2订阅列表")
+        translation_pause = svc.translator.pause_status()
+        if translation_pause:
+            info_lines.append(translation_pause)
+
         ages: list[str] = []
         for name in (
             svc.CACHE_WAR_STATUS,
@@ -1311,37 +1435,8 @@ class HelldiversPlugin(Star):
 
         arsenal = svc.arsenal_client
         if arsenal is not None:
-            catalog_path = arsenal.cache_dir / "catalog.json"
-            enemies_path = arsenal.cache_dir / "enemies.json"
-
-            def _arsenal_cache_mtimes() -> tuple[float, float]:
-                return (
-                    catalog_path.stat().st_mtime if catalog_path.is_file() else 0.0,
-                    enemies_path.stat().st_mtime if enemies_path.is_file() else 0.0,
-                )
-
-            catalog_mtime, enemies_mtime = await asyncio.to_thread(
-                _arsenal_cache_mtimes
-            )
-            parts = ["军需簿:"]
-            if catalog_mtime > 0:
-                detail = f"目录 {humanize_age(now - catalog_mtime)}"
-                if arsenal.data_version:
-                    detail += f" (v{arsenal.data_version})"
-                detail += f" {arsenal.item_count} 条"
-                if arsenal.dionatha_count:
-                    detail += f" +补充 {arsenal.dionatha_count}"
-                parts.append(detail)
-            else:
-                parts.append("目录未下载")
-                if arsenal.dionatha_count:
-                    parts.append(f"补充 {arsenal.dionatha_count} 条")
-            if enemies_mtime > 0:
-                parts.append(
-                    f"敌人表 {humanize_age(now - enemies_mtime)}"
-                    f" {arsenal.enemy_count} 种"
-                )
-            cache_lines.append(" · ".join(parts))
+            await arsenal.load_cached()
+            cache_lines.extend(arsenal.diagnostic_lines())
 
         yield event.plain_result(
             build_ping_report(

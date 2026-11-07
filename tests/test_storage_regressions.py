@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import hashlib
 import tempfile
 import threading
 import time
@@ -11,10 +12,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from astrbot_plugin_Helldivers.clients.bilibili_monitor import BilibiliMonitor, BilibiliPost
+from astrbot_plugin_Helldivers.clients.bilibili_monitor import BilibiliMonitor, BilibiliPost, PendingBilibiliPost
 from astrbot_plugin_Helldivers.clients.companion_news_monitor import CompanionNewsMonitor
 from astrbot_plugin_Helldivers.clients.translator import TranslationCache
-from astrbot_plugin_Helldivers.core.push_policy import PENDING_TTL_SECONDS
+from astrbot_plugin_Helldivers.core.push_policy import PushPolicy
+
+PENDING_TTL_SECONDS = PushPolicy().ttl_seconds
 
 
 def bilibili(path: Path) -> BilibiliMonitor:
@@ -35,16 +38,17 @@ class RetentionTests(unittest.IsolatedAsyncioTestCase):
             source.write_bytes(b"snapshot")
             monitor = CompanionNewsMonitor(root / "state")
             monitor.subscribe("offline")
+            monitor.commit_fingerprint("baseline")
             for index in range(205):
-                await monitor.enqueue(f"v2:{index}", source)
-            self.assertEqual(len(monitor.pending), 100)
-            self.assertEqual(len(list(monitor.data_dir.glob("pending_*.png"))), 100)
-            self.assertNotIn("v2:104", monitor.pending)
-            self.assertIn("v2:105", monitor.pending)
+                await monitor.queue_news(f"v2:{index}", source)
+            self.assertEqual(len(monitor.pending_news), 100)
+            self.assertEqual(len(list(monitor.outbox_dir.glob("*.png"))), 100)
+            self.assertNotIn("v2:104", monitor.pending_news)
+            self.assertIn("v2:105", monitor.pending_news)
             self.assertEqual(monitor.sessions, ["offline"])
             restored = CompanionNewsMonitor(monitor.data_dir)
-            self.assertEqual(restored.pending, monitor.pending)
-            self.assertEqual(restored.queued_at, monitor.queued_at)
+            self.assertEqual(restored.pending_news, monitor.pending_news)
+            self.assertEqual({k: v.queued_at for k, v in restored.pending_news.items()}, {k: v.queued_at for k, v in monitor.pending_news.items()})
 
     async def test_companion_byte_budget_and_expiry_cleanup_on_reload(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -53,21 +57,20 @@ class RetentionTests(unittest.IsolatedAsyncioTestCase):
             source.write_bytes(b"123456")
             monitor = CompanionNewsMonitor(root / "state")
             monitor.subscribe("offline")
-            with patch(
-                "astrbot_plugin_Helldivers.clients.companion_news_monitor.MAX_PENDING_IMAGE_BYTES", 10
-            ):
-                await monitor.enqueue("v2:first", source)
-                await monitor.enqueue("v2:second", source)
-                self.assertEqual(list(monitor.pending), ["v2:second"])
-                self.assertFalse(monitor.pending_image("v2:first").exists())
-            monitor.queued_at["v2:second"] = time.time() - PENDING_TTL_SECONDS - 1
+            monitor.commit_fingerprint("baseline")
+            monitor.policy = PushPolicy(max_image_bytes=10)
+            await monitor.queue_news("v2:first", source)
+            await monitor.queue_news("v2:second", source)
+            self.assertEqual(list(monitor.pending_news), ["v2:second"])
+            self.assertFalse(monitor.pending_image_path("v2:first").exists())
+            monitor.pending_news["v2:second"].queued_at = time.time() - PENDING_TTL_SECONDS - 1
             monitor._save_state()
-            orphan = monitor.data_dir / "pending_orphan.png"
+            orphan = monitor.outbox_dir / "orphan.png"
             orphan.write_bytes(b"orphan")
             restored = CompanionNewsMonitor(monitor.data_dir)
-            self.assertEqual(restored.pending, {})
-            self.assertEqual(restored.queued_at, {})
-            self.assertEqual(list(restored.data_dir.glob("pending_*.png")), [])
+            self.assertEqual(restored.pending_news, {})
+            self.assertEqual(restored.pending_news, {})
+            self.assertEqual(list(restored.outbox_dir.glob("*.png")), [])
             self.assertEqual(restored.last_fingerprint, "v2:second")
             self.assertEqual(restored.sessions, ["offline"])
 
@@ -77,27 +80,26 @@ class RetentionTests(unittest.IsolatedAsyncioTestCase):
             source.write_bytes(b"too-large")
             monitor = CompanionNewsMonitor(Path(tmp) / "state")
             monitor.subscribe("offline")
-            with patch(
-                "astrbot_plugin_Helldivers.clients.companion_news_monitor.MAX_PENDING_IMAGE_BYTES", 1
-            ):
-                await monitor.enqueue("v2:large", source)
-            self.assertEqual(monitor.pending, {})
+            monitor.commit_fingerprint("baseline")
+            monitor.policy = PushPolicy(max_image_bytes=1)
+            await monitor.queue_news("v2:large", source)
+            self.assertEqual(monitor.pending_news, {})
             self.assertEqual(monitor.last_fingerprint, "v2:large")
-            self.assertFalse(monitor.pending_image("v2:large").exists())
+            self.assertFalse(monitor.pending_image_path("v2:large").exists())
 
     async def test_companion_legacy_state_uses_snapshot_mtime(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             monitor = CompanionNewsMonitor(root)
-            image = monitor.pending_image("v2:legacy")
+            image = root / f"pending_{hashlib.sha256(b'v2:legacy').hexdigest()}.png"
             image.write_bytes(b"old")
             (root / "state.json").write_text(json.dumps({
                 "sessions": ["offline"], "last_fingerprint": "v2:legacy",
                 "pending": {"v2:legacy": ["offline"]},
             }))
             restored = CompanionNewsMonitor(root)
-            self.assertAlmostEqual(restored.queued_at["v2:legacy"], image.stat().st_mtime)
-            self.assertEqual(CompanionNewsMonitor(root).queued_at, restored.queued_at)
+            self.assertAlmostEqual(restored.pending_news["v2:legacy"].queued_at, image.stat().st_mtime)
+            self.assertEqual(CompanionNewsMonitor(root).pending_news["v2:legacy"].queued_at, restored.pending_news["v2:legacy"].queued_at)
 
     async def test_bilibili_bounds_backlog_then_expires_even_during_feed_outage(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -109,20 +111,20 @@ class RetentionTests(unittest.IsolatedAsyncioTestCase):
                 BilibiliPost(str(i), "author", "news", ()) for i in reversed(range(205))
             ])
             await monitor.check_once()
-            self.assertEqual(len(monitor.pending), 100)
-            self.assertNotIn("104", monitor.pending)
-            self.assertIn("105", monitor.pending)
+            self.assertEqual(len(monitor.pending_posts), 100)
+            self.assertNotIn("104", monitor.pending_posts)
+            self.assertIn("105", monitor.pending_posts)
             self.assertEqual(monitor.send_post.await_count, 100)
             restored = bilibili(root)
-            self.assertEqual(restored.pending, json.loads(json.dumps(monitor.pending)))
-            for entry in restored.pending.values():
-                entry["queued_at"] = time.time() - PENDING_TTL_SECONDS - 1
+            self.assertEqual(restored.pending_posts, monitor.pending_posts)
+            for entry in restored.pending_posts.values():
+                entry.queued_at = time.time() - PENDING_TTL_SECONDS - 1
             restored.fetch_posts = AsyncMock(side_effect=RuntimeError("offline feed"))
             with self.assertRaisesRegex(RuntimeError, "offline feed"):
                 await restored.check_once()
             restored.send_post.assert_not_awaited()
-            self.assertEqual(restored.pending, {})
-            self.assertEqual(bilibili(root).pending, {})
+            self.assertEqual(restored.pending_posts, {})
+            self.assertEqual(bilibili(root).pending_posts, {})
             self.assertEqual(restored.sessions, ["offline"])
 
     async def test_bilibili_legacy_timestamp_migrates_once_and_expiry_survives_restart(self):
@@ -136,21 +138,24 @@ class RetentionTests(unittest.IsolatedAsyncioTestCase):
                 }},
             }))
             monitor = bilibili(root)
-            timestamp = monitor.pending["new"]["queued_at"]
-            self.assertEqual(bilibili(root).pending["new"]["queued_at"], timestamp)
-            monitor.pending["new"]["queued_at"] = time.time() - PENDING_TTL_SECONDS - 1
+            timestamp = monitor.pending_posts["new"].queued_at
+            self.assertEqual(bilibili(root).pending_posts["new"].queued_at, timestamp)
+            monitor.pending_posts["new"].queued_at = time.time() - PENDING_TTL_SECONDS - 1
             monitor._save_state()
-            self.assertEqual(bilibili(root).pending, {})
+            self.assertEqual(bilibili(root).pending_posts, {})
 
 
 class InvalidPendingTests(unittest.IsolatedAsyncioTestCase):
+    def typed_entry(self, dynamic_id="good"):
+        return PendingBilibiliPost(BilibiliPost(dynamic_id, "author", "news", ()), ["offline"])
+
     def entry(self, dynamic_id="good"):
         return {
             "post": {"dynamic_id": dynamic_id, "author": "author", "text": "news", "image_urls": []},
             "sessions": ["offline"], "queued_at": time.time(),
         }
 
-    async def test_invalid_persisted_records_are_removed_and_valid_post_is_delivered(self):
+    async def test_invalid_persisted_records_preserve_original_state_until_repaired(self):
         invalid = [
             None, {}, {"post": {}, "sessions": ["offline"]},
             {"post": {"dynamic_id": "bad", "author": "a", "text": "news", "image_urls": None},
@@ -165,43 +170,42 @@ class InvalidPendingTests(unittest.IsolatedAsyncioTestCase):
                     "uid": "1", "sessions": ["offline"], "seen_ids": ["baseline"],
                     "pending": {"bad": bad, "good": self.entry()},
                 }))
+                original = (root / "state.json").read_bytes()
                 monitor = bilibili(root)
-                self.assertEqual(list(monitor.pending), ["good"])
-                self.assertNotIn("bad", json.loads((root / "state.json").read_text())["pending"])
-                monitor.send_post.return_value = 1
-                monitor.fetch_posts = AsyncMock(return_value=[])
-                self.assertEqual(await monitor.check_once(), 1)
-                self.assertEqual(monitor.send_post.call_args.args[0].dynamic_id, "good")
-                self.assertEqual(monitor.pending, {})
+                self.assertTrue(monitor._state_error)
+                with self.assertRaises(RuntimeError):
+                    await monitor.check_once()
+                monitor.send_post.assert_not_awaited()
+                self.assertEqual((root / "state.json").read_bytes(), original)
 
     async def test_in_memory_bad_record_is_pruned_before_delivery(self):
         with tempfile.TemporaryDirectory() as tmp:
             monitor = bilibili(Path(tmp))
             monitor.subscribe("offline")
-            monitor.pending = {"bad": {"post": {}, "sessions": ["offline"]}, "good": self.entry()}
+            monitor.pending_posts = {"bad": {"post": {}, "sessions": ["offline"]}, "good": self.typed_entry()}
             monitor.send_post.return_value = 1
-            self.assertEqual(await monitor._deliver_pending(), 1)
-            self.assertEqual(monitor.pending, {})
+            self.assertEqual(await monitor._deliver_pending(list(monitor.pending_posts)), 1)
+            self.assertEqual(monitor.pending_posts, {})
 
     async def test_record_corrupted_during_previous_send_does_not_abort_later_posts(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             monitor = bilibili(root)
             monitor.subscribe("offline")
-            monitor.pending = {key: self.entry(key) for key in ("first", "bad", "last")}
+            monitor.pending_posts = {key: self.typed_entry(key) for key in ("first", "bad", "last")}
 
             async def send(post, *_):
                 if post.dynamic_id == "first":
-                    monitor.pending["bad"]["post"] = {}
+                    monitor.pending_posts["bad"].post = {}
                 return 1
 
             monitor.send_post.side_effect = send
-            self.assertEqual(await monitor._deliver_pending(), 2)
+            self.assertEqual(await monitor._deliver_pending(list(monitor.pending_posts)), 2)
             self.assertEqual(
                 [call.args[0].dynamic_id for call in monitor.send_post.await_args_list],
                 ["first", "last"],
             )
-            self.assertEqual(bilibili(root).pending, {})
+            self.assertEqual(bilibili(root).pending_posts, {})
 
 
 class TranslationWriteTests(unittest.IsolatedAsyncioTestCase):

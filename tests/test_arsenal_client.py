@@ -124,15 +124,7 @@ class _BareClient:
 
     @staticmethod
     def make(cache_dir: Path) -> ArsenalClient:
-        client = ArsenalClient.__new__(ArsenalClient)
-        client.cache_dir = cache_dir
-        client._items = []
-        client._aliases = {}
-        client._dionatha_items = []
-        client._index = {}
-        client.proxy_url = None
-        client.timeout_seconds = 5
-        client.user_agent = "unit-test"
+        client = ArsenalClient(cache_dir, timeout=5, user_agent="unit-test")
         return client
 
 
@@ -144,7 +136,7 @@ class DownloadProxyTests(unittest.TestCase):
             cache = Path(tmp)
             session = _FakeSession(
                 [
-                    _FakeResp(200, b'{"items": [{"id": "test"}]}'),
+                    _FakeResp(200, b'{"items": [{"id": "test", "nameEn": "Test"}]}'),
                     _FakeResp(200, b'{"entries": []}'),
                 ]
             )
@@ -163,10 +155,9 @@ class DownloadProxyTests(unittest.TestCase):
             self.assertEqual(len(session.calls), 2)
             for url, proxy in session.calls:
                 self.assertEqual(proxy, "http://127.0.0.1:7890")
-            self.assertEqual((cache / "catalog.json").read_bytes(), b'{"items": [{"id": "test"}]}')
-            self.assertEqual(
-                (cache / "aliases.json").read_bytes(), b'{"entries": []}'
-            )
+            snapshot = json.loads((cache / "primary_snapshot.json").read_text())
+            self.assertEqual(snapshot["catalog"], {"items": [{"id": "test", "nameEn": "Test"}]})
+            self.assertEqual(snapshot["aliases"], {"entries": []})
 
 
 class CatalogValidationTests(unittest.IsolatedAsyncioTestCase):
@@ -177,7 +168,6 @@ class CatalogValidationTests(unittest.IsolatedAsyncioTestCase):
         client = _BareClient.make(root)
         client._lock = asyncio.Lock()
         client._loaded_at = 0
-        client._refresh_retry_at = 0
         client._maybe_start_dionatha = mock.Mock()
         return client
 
@@ -187,7 +177,7 @@ class CatalogValidationTests(unittest.IsolatedAsyncioTestCase):
             _FakeResp(200, self.CATALOG),
         ])
         body = await ArsenalClient._fetch_any(
-            session, ("bad", "good"), validator=ArsenalClient._validate_catalog
+            session, ("bad", "good"), validate=ArsenalClient._valid_primary
         )
         self.assertEqual(body, self.CATALOG)
         self.assertEqual(len(session.calls), 2)
@@ -272,7 +262,7 @@ class CatalogValidationTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(await client.ensure_loaded())
             client._download.assert_awaited_once()
             self.assertEqual(client.search("good")[0]["id"], "good")
-            self.assertEqual(client._loaded_at, 0)
+            self.assertGreater(client._primary_failed_at, 0)
 
     async def test_failed_refresh_backs_off_with_usable_stale_cache(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -284,16 +274,13 @@ class CatalogValidationTests(unittest.IsolatedAsyncioTestCase):
             os.utime(catalog, (old, old))
             client = self.make_client(root)
             client._download = mock.AsyncMock(return_value=False)
-            with mock.patch.object(arsenal_module.time, "monotonic", return_value=1000) as clock:
-                self.assertTrue(await client.ensure_loaded())
-                self.assertTrue(await client.ensure_loaded())
-                client._download.assert_awaited_once()
-                self.assertEqual(client.search("good")[0]["id"], "good")
-                # Expiring the retry window, not a successful refresh TTL,
-                # makes the next query try the mirrors again.
-                clock.return_value = 1000 + arsenal_module.CATALOG_RETRY_BACKOFF + 1
-                self.assertTrue(await client.ensure_loaded())
-                self.assertEqual(client._download.await_count, 2)
+            self.assertTrue(await client.ensure_loaded())
+            self.assertTrue(await client.ensure_loaded())
+            client._download.assert_awaited_once()
+            self.assertEqual(client.search("good")[0]["id"], "good")
+            client._primary_failed_at = time.time() - arsenal_module.ENEMIES_RETRY_BACKOFF - 1
+            self.assertTrue(await client.ensure_loaded())
+            self.assertEqual(client._download.await_count, 2)
 
     async def test_failed_initial_download_backs_off_without_cache(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -309,7 +296,7 @@ class CatalogValidationTests(unittest.IsolatedAsyncioTestCase):
             client = self.make_client(root)
             client._download = mock.AsyncMock(return_value=False)
             self.assertFalse(await client.ensure_loaded())
-            self.assertGreater(client._refresh_retry_at, 0)
+            self.assertGreater(client._primary_failed_at, 0)
 
             async def repair(*_):
                 (root / "catalog.json").write_bytes(self.CATALOG)
@@ -319,7 +306,7 @@ class CatalogValidationTests(unittest.IsolatedAsyncioTestCase):
             client._download.side_effect = repair
             self.assertTrue(await client.ensure_loaded(force=True))
             self.assertEqual(client._download.await_count, 2)
-            self.assertEqual(client._refresh_retry_at, 0)
+            self.assertEqual(client._primary_failed_at, 0)
             self.assertTrue(await client.ensure_loaded())
             self.assertEqual(client._download.await_count, 2)
 
@@ -358,16 +345,16 @@ class DionathaDiskLoadTests(unittest.TestCase):
             self.assertIn("dionatha:weapons-1", client._index)
             self.assertIn("weapons-1", client._index)
 
-    def test_missing_collection_returns_false(self) -> None:
+    def test_missing_collection_keeps_other_cached_collections(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             cache = Path(tmp)
             self._write_collections(cache)
             (cache / "dionatha_weapons.json").unlink()
             client = _BareClient.make(cache)
-            self.assertFalse(asyncio.run(client._try_load_dionatha_disk()))
-            self.assertEqual(client.dionatha_count, 0)
+            self.assertTrue(asyncio.run(client._try_load_dionatha_disk()))
+            self.assertEqual(client.dionatha_count, len(DIONATHA_COLLECTIONS) - 1)
 
-    def test_stale_collection_returns_false(self) -> None:
+    def test_stale_collection_is_usable_after_restart(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             cache = Path(tmp)
             self._write_collections(cache)
@@ -375,9 +362,9 @@ class DionathaDiskLoadTests(unittest.TestCase):
             old = time.time() - REFRESH_INTERVAL - 10
             os.utime(stale, (old, old))
             client = _BareClient.make(cache)
-            self.assertFalse(asyncio.run(client._try_load_dionatha_disk()))
+            self.assertTrue(asyncio.run(client._try_load_dionatha_disk()))
 
-    def test_corrupt_json_returns_false(self) -> None:
+    def test_corrupt_collection_does_not_drop_others(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             cache = Path(tmp)
             self._write_collections(cache)
@@ -385,10 +372,10 @@ class DionathaDiskLoadTests(unittest.TestCase):
                 "{not json", encoding="utf-8"
             )
             client = _BareClient.make(cache)
-            self.assertFalse(asyncio.run(client._try_load_dionatha_disk()))
-            self.assertEqual(client.dionatha_count, 0)
+            self.assertTrue(asyncio.run(client._try_load_dionatha_disk()))
+            self.assertEqual(client.dionatha_count, len(DIONATHA_COLLECTIONS) - 1)
 
-    def test_non_object_top_level_returns_false(self) -> None:
+    def test_non_object_collection_does_not_drop_others(self) -> None:
         # 合法 JSON 但顶层非对象（如 [1,2,3]）：不该抛 AttributeError 逃逸
         with tempfile.TemporaryDirectory() as tmp:
             cache = Path(tmp)
@@ -397,8 +384,8 @@ class DionathaDiskLoadTests(unittest.TestCase):
                 "[1, 2, 3]", encoding="utf-8"
             )
             client = _BareClient.make(cache)
-            self.assertFalse(asyncio.run(client._try_load_dionatha_disk()))
-            self.assertEqual(client.dionatha_count, 0)
+            self.assertTrue(asyncio.run(client._try_load_dionatha_disk()))
+            self.assertEqual(client.dionatha_count, len(DIONATHA_COLLECTIONS) - 1)
 
 
 if __name__ == "__main__":

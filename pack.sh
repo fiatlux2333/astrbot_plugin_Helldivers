@@ -1,56 +1,70 @@
 #!/usr/bin/env bash
-# 生成干净的插件市场发布包（<16MB）。
-# 排除 .git 历史、缓存、构建产物等非插件文件。
+# Package only runtime files, docs and assets; retain previous release artifacts.
 set -euo pipefail
-
 cd "$(dirname "$0")"
+python3 - <<'PY'
+import hashlib
+import json
+import re
+import shutil
+import tempfile
+import zipfile
+from pathlib import Path
 
-OUT_DIR="dist"
-ZIP="$OUT_DIR/astrbot_plugin_Helldivers.zip"
-
-rm -rf "$OUT_DIR"
-mkdir -p "$OUT_DIR"
-
-zip -r -X "$ZIP" . \
-  -x ".git/*" \
-  -x ".venv/*" \
-  -x "venv/*" \
-  -x ".env" \
-  -x ".env.*" \
-  -x ".publish-*/*" \
-  -x ".publish-*" \
-  -x ".gitignore" \
-  -x "__pycache__/*" \
-  -x "*/__pycache__/*" \
-  -x "*/*/__pycache__/*" \
-  -x "*.pyc" \
-  -x "*.pyo" \
-  -x ".cache/*" \
-  -x ".workbuddy/*" \
-  -x ".slidep/*" \
-  -x ".playwright-mcp/*" \
-  -x ".pytest_cache/*" \
-  -x ".ruff_cache/*" \
-  -x ".zcode/*" \
-  -x "dist/*" \
-  -x "pack.sh" \
-  -x "data/*" \
-  -x "*.log" \
-  -x "*.tmp" \
-  -x "*.tmp.png" \
-  -x ".coverage" \
-  -x "htmlcov/*"
-
-SIZE=$(stat -c %s "$ZIP" 2>/dev/null || stat -f %z "$ZIP")
-MB=$(awk "BEGIN{printf \"%.1f\", $SIZE/1048576}")
-# 注意：zip 的 -l 是创建模式的换行转换选项，对已有压缩包会以 "nothing to do"
-# 退出（码 12）；列目录必须用 unzip -l。
-COUNT=$(unzip -l "$ZIP" | tail -1 | awk '{print $2}')
-if [ -z "$COUNT" ]; then
-  COUNT=$(python3 -c "import zipfile,sys;print(len(zipfile.ZipFile(sys.argv[1]).namelist()))" "$ZIP")
-fi
-
-echo ""
-echo "✅ 打包完成: $ZIP"
-echo "   大小: ${MB}MB / 16MB 上限"
-echo "   文件数: $COUNT"
+root = Path.cwd()
+version = re.search(r'^version:\s*[\"\']?v?([0-9]+\.[0-9]+\.[0-9]+)', (root / 'metadata.yaml').read_text(), re.M).group(1)
+assert f'PLUGIN_VERSION = "v{version}"' in (root / 'core/plugin_info.py').read_text(), 'version mismatch'
+output = root / 'dist'
+output.mkdir(exist_ok=True)
+files = [root / name for name in ('README.md', 'LICENSE', 'services.py', '_conf_schema.json', '__init__.py', 'metadata.yaml', 'logo.png', 'main.py', 'requirements.txt')]
+for folder in ('assets', 'clients', 'core', 'renderers', 'docs'):
+    for path in (root / folder).rglob('*'):
+        parts = path.relative_to(root).parts
+        if any(part.startswith('.') or part == '__pycache__' for part in parts):
+            continue
+        if path.is_symlink():
+            raise ValueError(f'Unexpected symlink in package: {path.relative_to(root)}')
+        if path.is_file() and (folder in {'assets', 'docs'} or path.suffix == '.py'):
+            files.append(path)
+assert all(path.is_file() for path in files), 'missing required release file'
+target = output / f'astrbot_plugin_Helldivers-v{version}.zip'
+with tempfile.NamedTemporaryFile(dir=output, suffix='.tmp', delete=False) as handle:
+    temporary = Path(handle.name)
+try:
+    with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+        for path in sorted(files):
+            archive.write(path, path.relative_to(root).as_posix())
+    assert temporary.stat().st_size < 32 * 1024 * 1024, 'package exceeds 32 MiB'
+    with zipfile.ZipFile(temporary) as archive:
+        assert archive.testzip() is None, 'ZIP integrity check failed'
+        for name in archive.namelist():
+            if name.endswith('.py'):
+                compile(archive.read(name), name, 'exec')
+    digest = hashlib.sha256(temporary.read_bytes()).hexdigest()
+    if target.exists():
+        previous = hashlib.sha256(target.read_bytes()).hexdigest()
+        if previous != digest:
+            backup = output / 'archive' / f'{target.stem}-{previous[:12]}.zip'
+            backup.parent.mkdir(exist_ok=True)
+            if not backup.exists():
+                shutil.copy2(target, backup)
+    temporary.replace(target)
+    generic = output / 'astrbot_plugin_Helldivers.zip'
+    staged = generic.with_suffix('.tmp')
+    shutil.copy2(target, staged)
+    staged.replace(generic)
+    manifest = []
+    for path in sorted(output.glob('astrbot_plugin_Helldivers-v*.zip')):
+        with zipfile.ZipFile(path) as archive:
+            count = len(archive.namelist())
+        manifest.append({'file': path.name, 'version': path.stem.split('-v')[-1],
+                         'size_bytes': path.stat().st_size, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                         'file_count': count})
+    staging = output / 'manifest.tmp'
+    staging.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')
+    staging.replace(output / 'manifest.json')
+    print(json.dumps({'file': str(target), 'version': version, 'size_bytes': target.stat().st_size,
+                      'sha256': digest, 'file_count': len(files)}, ensure_ascii=False))
+finally:
+    temporary.unlink(missing_ok=True)
+PY

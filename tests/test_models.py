@@ -201,7 +201,8 @@ class ApiClientTests(unittest.IsolatedAsyncioTestCase):
                 self.request = (method, path, kwargs)
                 return {
                     "clientTime": 1_785_937_046_432,
-                    "timeSinceStart": 79_896_733,
+                    "timeSinceStart": 81_896_733,
+                    "warStatus": {"time": 79_896_733},
                     "news": [
                         {
                             "id": "3844",

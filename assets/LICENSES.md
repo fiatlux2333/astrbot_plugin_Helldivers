@@ -10,6 +10,7 @@ Unless noted below, PNG files in this directory are original fan-art-like geomet
 - Every original runtime PNG was originally rendered locally from an SVG design and retains its alpha channel; the SVG source masters were removed from the repository in August 2026 (the repository is PNG-only). Pillow is the only runtime image dependency.
 - `global_events/super_earth_flag.*` is an original stylized flag illustration and is not a copy of an in-game or promotional image.
 - `tactical/eagle_storm.*`, `tactical/orbital_blockade.*`, and `tactical/heavy_ordnance.*` are user-provided DSS tactical icons. Their SVG source credits Dogo314; the bundled PNGs are direct local rasterizations of those sources.
+- `user/map.png` is the user-provided galaxy map supplied on 2026-11-07 for `/map` in `uploaded_reference` mode. The original 1280×1280 RGBA PNG is preserved byte-for-byte (2,324,817 bytes); SHA-256: `302fc40692f05225fec61bbc224566b668ff20b38d32cdb53624485c260eda62`. It is not project-original artwork; rights remain with the respective owners, and the repository MIT grant does not relicense this supplied image.
 - `user/dss.png` is the user-provided DSS reference image used by the DSS report renderer.
 - `user/super_earth_flag.png` is the user-provided Super Earth flag reference used for major-order and global-event artwork.
 - `user/*_template.png` files are user-provided visual references used as darkened cockpit backplates beneath dynamic report data.
@@ -40,3 +41,5 @@ Helldivers and related names and fictional concepts are trademarks or intellectu
 - `tactical/heavy_ordnance.png`
 - `tactical/orbital_napalm.png`
 - `global_events/super_earth_flag.png`
+
+- `user/map.png` — supplied 2026-11-07; see provenance above.
