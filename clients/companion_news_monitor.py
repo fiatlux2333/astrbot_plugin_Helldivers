@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import logging
 import re
 import shutil
 import time
@@ -15,10 +14,7 @@ from ..core.persistence import finish_disk_call, write_json_atomic
 from ..core.push import has_group_subscription, normalize_sessions
 from ..core.push_policy import DeliveryState, PushPolicy, backup_push_state, read_push_state
 
-try:
-    from astrbot.api import logger
-except Exception:  # pragma: no cover
-    logger = logging.getLogger(__name__)
+from astrbot.api import logger
 
 
 @dataclass

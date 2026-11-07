@@ -24,12 +24,7 @@ from ..core.diagnostics import HEALTH
 from ..core.persistence import finish_disk_call, write_json_atomic
 from ..core.arsenal_merge import annotate_supplement, merge_equipment
 
-try:
-    from astrbot.api import logger
-except ImportError:  # pragma: no cover - 单测环境
-    import logging
-
-    logger = logging.getLogger(__name__)
+from astrbot.api import logger
 
 # 顺序对境内服务器有意义：前两路可直连成功，raw 直连作末位兜底
 RAW_URLS: Final[tuple[str, ...]] = (

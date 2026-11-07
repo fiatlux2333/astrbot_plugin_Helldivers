@@ -10,8 +10,10 @@ import shutil
 import tempfile
 import zipfile
 from pathlib import Path
+from scripts.check_release import MAX_RELEASE_BYTES, check_path
 
 root = Path.cwd()
+check_path(root)
 version = re.search(r'^version:\s*[\"\']?v?([0-9]+\.[0-9]+\.[0-9]+)', (root / 'metadata.yaml').read_text(), re.M).group(1)
 assert f'PLUGIN_VERSION = "v{version}"' in (root / 'core/plugin_info.py').read_text(), 'version mismatch'
 output = root / 'dist'
@@ -34,12 +36,13 @@ try:
     with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         for path in sorted(files):
             archive.write(path, path.relative_to(root).as_posix())
-    assert temporary.stat().st_size < 32 * 1024 * 1024, 'package exceeds 32 MiB'
+    assert temporary.stat().st_size <= MAX_RELEASE_BYTES, 'package exceeds 16 MB'
     with zipfile.ZipFile(temporary) as archive:
         assert archive.testzip() is None, 'ZIP integrity check failed'
         for name in archive.namelist():
             if name.endswith('.py'):
                 compile(archive.read(name), name, 'exec')
+    check_path(temporary)
     digest = hashlib.sha256(temporary.read_bytes()).hexdigest()
     if target.exists():
         previous = hashlib.sha256(target.read_bytes()).hexdigest()

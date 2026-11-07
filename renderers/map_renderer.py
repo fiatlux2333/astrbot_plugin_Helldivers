@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import math
 import os
 import random
@@ -35,10 +34,7 @@ except Exception:  # pragma: no cover
     asset_sha256 = lambda value: ""  # type: ignore
     paste_contain = None  # type: ignore
 
-try:
-    from astrbot.api import logger
-except Exception:  # pragma: no cover
-    logger = logging.getLogger(__name__)
+from astrbot.api import logger
 
 try:
     from PIL import Image, ImageDraw, ImageFilter, ImageFont

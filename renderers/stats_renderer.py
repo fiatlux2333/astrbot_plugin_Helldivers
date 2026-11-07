@@ -1,7 +1,7 @@
 """Pillow renderer for the galaxy-wide season statistics view model.
 
-The renderer is deliberately standalone: it has no required AstrBot imports and
-no required project asset package. If a sibling/top-level ``visual_assets``
+The renderer uses AstrBot's official logger and has no required project asset
+package. If a sibling/top-level ``visual_assets``
 module is available, common emblem-loader conventions are tried; otherwise
 clean vector-style emblems are drawn with Pillow.
 """
@@ -9,7 +9,6 @@ clean vector-style emblems are drawn with Pillow.
 from __future__ import annotations
 
 import importlib
-import logging
 import math
 import random
 import time
@@ -17,10 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-try:  # AstrBot logging is optional.
-    from astrbot.api import logger as _logger
-except Exception:  # pragma: no cover - normal outside AstrBot
-    _logger = logging.getLogger(__name__)
+from astrbot.api import logger
 
 try:
     from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -789,7 +785,7 @@ class StatsRenderer:
         """
 
         if not self.available:
-            _logger.warning("[HD2] Pillow is unavailable; cannot render statistics")
+            logger.warning("[HD2] Pillow is unavailable; cannot render statistics")
             return None
         try:
             base = _background(WIDTH, HEIGHT)
@@ -829,10 +825,7 @@ class StatsRenderer:
                 self._cleanup()
             return final_path
         except Exception as exc:
-            try:
-                _logger.exception("[HD2] galaxy statistics render failed: %s", exc)
-            except TypeError:  # Some logger shims only accept one string argument.
-                _logger.exception(f"[HD2] galaxy statistics render failed: {exc}")
+            logger.exception("[HD2] galaxy statistics render failed: %s", exc)
             return None
 
 
